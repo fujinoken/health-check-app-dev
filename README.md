@@ -1,16 +1,13 @@
-# ひだまり 健康チェック管理システム Ver3.3.1
+# ひだまり 健康チェック管理システム Ver3.3.2
 
-画面分離・安全移行版（起動修正版）です。
+## 修正内容
+- Streamlitの自動ページメニューに `app / admin / dashboard / excretion / health input / life` が出ないよう、`pages/` フォルダを削除しました。
+- 起動ファイルは `app.py` のままです。
+- 本体は `services/legacy_app.py` に退避しています。
+- 将来の画面分離用メモは `app_pages/` に置いています。
 
-## 起動ファイル
-Streamlit Cloud の Main file path は `app.py` のままです。
+## GitHubへアップロードするもの
+このフォルダの中身すべてをアップロードしてください。
 
-## 構成
-- app.py: 起動入口
-- services/legacy_app.py: 既存安定版の本体
-- services/runtime.py: 共通実行入口
-- pages/: 将来の画面分離先
-
-## 注意
-GitHubへは、このフォルダの中身をルートへアップロードしてください。
-`hidamari_ver3_3_page_split_fixed/` フォルダごと入れないでください。
+## Streamlit Cloud設定
+Main file path: `app.py`
