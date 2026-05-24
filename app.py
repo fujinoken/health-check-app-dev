@@ -80,6 +80,7 @@ ADMIN_ONLY_MENUS = [
     "現場の気づき構造化・AI管理者支援",
     "セキュリティ・保守管理",
     "利用者ID移行チェック",
+    "利用者名ゆれ紐づけマスタ",
 ]
 
 def filter_admin_menus(menu_list):
@@ -153,6 +154,7 @@ SQLITE_TABLE_USERS = "users"
 SQLITE_TABLE_APP_SETTINGS = "app_settings"
 SQLITE_TABLE_LIFE_ADL = "life_adl_assessments"
 SQLITE_TABLE_AI_INSIGHT_LOGS = "ai_insight_logs"
+SQLITE_TABLE_USER_NAME_ALIASES = "user_name_aliases"
 
 APP_SETTING_COLUMNS = [
     "設定キー",
@@ -435,6 +437,7 @@ def ensure_hidamari_db():
     ensure_account_file()
     ensure_login_history_file()
     ensure_user_file()
+    ensure_user_name_alias_table()
     try:
         ensure_life_adl_file()
     except Exception:
@@ -1038,6 +1041,17 @@ LOGIN_HISTORY_COLUMNS = [
     "メモ",
 ]
 
+USER_NAME_ALIAS_COLUMNS = [
+    "alias_id",
+    "表記ゆれ名",
+    "紐づけ先 user_id",
+    "正式利用者名",
+    "有効/無効",
+    "備考",
+    "更新日時",
+    "更新者",
+]
+
 DEFAULT_ALERT_CONDITIONS = [
     {"条件ID": "C001", "使用": True, "条件名": "未排便3日", "重要度": "注意", "分類": "排泄", "条件種別": "未排便", "閾値1": 3, "閾値2": "", "日数": 3, "キーワード": "", "表示メッセージ": "直近{日数}日間、排便記録がありません。水分・食事量・腹部症状を確認してください。", "並び順": 10},
     {"条件ID": "C002", "使用": True, "条件名": "水様便・下痢便あり", "重要度": "注意", "分類": "排泄", "条件種別": "便性状", "閾値1": "", "閾値2": "", "日数": 1, "キーワード": "水様便,下痢便", "表示メッセージ": "水様便・下痢便の記録があります。回数・腹部症状・感染症状を確認してください。", "並び順": 20},
@@ -1243,24 +1257,102 @@ def ensure_user_id_value(user_id, user_name) -> str:
     return user_id if user_id else make_user_id_from_name(user_name)
 
 
-def build_user_name_to_id_map(include_hidden=True) -> dict:
-    """利用者名→user_idの対応表を作る。画面表示は利用者名のまま、内部連携に使う。"""
+def ensure_user_name_alias_table():
+    """利用者名ゆれ紐づけマスタをSQLiteに用意する。"""
+    try:
+        if not sqlite_table_exists(SQLITE_TABLE_USER_NAME_ALIASES):
+            save_sqlite_table(
+                pd.DataFrame(columns=USER_NAME_ALIAS_COLUMNS),
+                SQLITE_TABLE_USER_NAME_ALIASES,
+                USER_NAME_ALIAS_COLUMNS,
+                unique_cols=["alias_id"],
+            )
+    except Exception:
+        pass
+
+
+def normalize_user_name_alias_df(df: pd.DataFrame) -> pd.DataFrame:
+    """表記ゆれマスタの列・値を整える。"""
+    if df is None:
+        df = pd.DataFrame(columns=USER_NAME_ALIAS_COLUMNS)
+    work = df.copy()
+    for col in USER_NAME_ALIAS_COLUMNS:
+        if col not in work.columns:
+            work[col] = ""
+    work = work[USER_NAME_ALIAS_COLUMNS].copy()
+    work["alias_id"] = work["alias_id"].map(lambda x: clean_text(x))
+    work["表記ゆれ名"] = work["表記ゆれ名"].map(lambda x: clean_text(x))
+    work["紐づけ先 user_id"] = work["紐づけ先 user_id"].map(lambda x: clean_text(x))
+    work["正式利用者名"] = work["正式利用者名"].map(lambda x: clean_text(x))
+    work["有効/無効"] = work["有効/無効"].map(lambda x: clean_text(x, "有効"))
+    work.loc[~work["有効/無効"].isin(["有効", "無効"]), "有効/無効"] = "有効"
+    work["備考"] = work["備考"].map(lambda x: clean_text(x))
+    work["更新日時"] = work["更新日時"].map(lambda x: clean_text(x))
+    work["更新者"] = work["更新者"].map(lambda x: clean_text(x))
+    # 空の表記ゆれ名は除外。同じ表記ゆれ名は最後の設定を優先。
+    work = work[work["表記ゆれ名"] != ""].copy()
+    for idx, row in work.iterrows():
+        if not clean_text(row.get("alias_id")):
+            source = f"{clean_text(row.get('表記ゆれ名'))}__{clean_text(row.get('紐づけ先 user_id'))}"
+            work.at[idx, "alias_id"] = "alias_" + hashlib.sha1(source.encode("utf-8")).hexdigest()[:12]
+    work = work.drop_duplicates(subset=["表記ゆれ名"], keep="last")
+    return work.reset_index(drop=True)
+
+
+def load_user_name_aliases(include_disabled=False) -> pd.DataFrame:
+    ensure_user_name_alias_table()
+    df = load_sqlite_table(SQLITE_TABLE_USER_NAME_ALIASES, USER_NAME_ALIAS_COLUMNS)
+    df = normalize_user_name_alias_df(df)
+    if not include_disabled:
+        df = df[df["有効/無効"] == "有効"].copy()
+    return df.reset_index(drop=True)
+
+
+def save_user_name_aliases(df: pd.DataFrame):
+    work = normalize_user_name_alias_df(df)
+    save_sqlite_table(work, SQLITE_TABLE_USER_NAME_ALIASES, USER_NAME_ALIAS_COLUMNS, unique_cols=["alias_id"])
+
+
+def build_user_name_to_id_map(include_hidden=True, include_aliases=True) -> dict:
+    """
+    利用者名→user_idの対応表を作る。
+    安全のため、正式利用者名は原則「完全一致」のみ。
+    表記ゆれは、管理者が利用者名ゆれ紐づけマスタで有効登録したものだけ自動補完する。
+    """
     try:
         users = load_users(include_hidden=include_hidden)
     except Exception:
         users = pd.DataFrame(columns=USER_COLUMNS)
     mapping = {}
+    official_by_id = {}
     for _, row in users.iterrows():
         name = clean_text(row.get("利用者名"))
         uid = ensure_user_id_value(row.get("user_id", ""), name)
-        if name:
+        if name and uid:
             mapping[name] = uid
-            mapping[normalize_user_name_for_match(name)] = uid
+            official_by_id[uid] = name
+
+    if include_aliases:
+        try:
+            aliases = load_user_name_aliases(include_disabled=False)
+            for _, row in aliases.iterrows():
+                alias_name = clean_text(row.get("表記ゆれ名"))
+                uid = clean_text(row.get("紐づけ先 user_id"))
+                if alias_name and uid and uid in official_by_id:
+                    # 表記ゆれ名は完全一致・照合キー一致の両方を登録するが、管理者登録済みのものに限る。
+                    mapping[alias_name] = uid
+                    mapping[normalize_user_name_for_match(alias_name)] = uid
+        except Exception:
+            pass
     return mapping
 
 
 def attach_user_ids(df: pd.DataFrame, name_col="利用者名", id_col="user_id") -> pd.DataFrame:
-    """既存データへuser_id列を安全に補完する。"""
+    """
+    既存データへuser_id列を安全に補完する。
+    正式利用者名の完全一致、または管理者が登録した表記ゆれマスタに一致した場合のみ補完する。
+    未確認の名称は空欄のまま残し、管理者の確認対象にする。
+    """
     if df is None:
         return df
     work = df.copy()
@@ -1268,14 +1360,14 @@ def attach_user_ids(df: pd.DataFrame, name_col="利用者名", id_col="user_id")
         work[id_col] = ""
     if name_col not in work.columns:
         return work
-    mapping = build_user_name_to_id_map(include_hidden=True)
+    mapping = build_user_name_to_id_map(include_hidden=True, include_aliases=True)
 
     def resolve(row):
         existing = clean_text(row.get(id_col, ""))
         if existing:
             return existing
         name = clean_text(row.get(name_col, ""))
-        return mapping.get(name) or mapping.get(normalize_user_name_for_match(name)) or make_user_id_from_name(name)
+        return mapping.get(name) or mapping.get(normalize_user_name_for_match(name)) or ""
 
     if not work.empty:
         work[id_col] = work.apply(resolve, axis=1)
@@ -1283,8 +1375,9 @@ def attach_user_ids(df: pd.DataFrame, name_col="利用者名", id_col="user_id")
 
 
 def get_user_id_by_name(user_name: str) -> str:
-    mapping = build_user_name_to_id_map(include_hidden=True)
-    return mapping.get(clean_text(user_name)) or mapping.get(normalize_user_name_for_match(user_name)) or make_user_id_from_name(user_name)
+    mapping = build_user_name_to_id_map(include_hidden=True, include_aliases=True)
+    name = clean_text(user_name)
+    return mapping.get(name) or mapping.get(normalize_user_name_for_match(name)) or ""
 
 
 def get_user_name_by_id(user_id: str) -> str:
@@ -1386,7 +1479,7 @@ def show_user_id_migration_check():
     variations = build_user_name_variation_df()
     st.dataframe(variations, use_container_width=True, hide_index=True)
     if not variations.empty and (variations["状態"] == "表記ゆれ候補").any():
-        st.warning("表記ゆれ候補があります。必要に応じて利用者マスタで表記を整えてから移行してください。")
+        st.warning("表記ゆれ候補があります。必要に応じて「利用者名ゆれ紐づけマスタ」で正式利用者に紐づけてから補完してください。")
     else:
         st.success("大きな表記ゆれ候補は見つかっていません。")
 
@@ -1407,6 +1500,202 @@ def show_user_id_migration_check():
             st.dataframe(result, use_container_width=True, hide_index=True)
             st.rerun()
 
+
+
+
+def build_unmatched_user_names_df():
+    """主要テーブルから、user_id未補完の利用者名を集める。"""
+    targets = [
+        ("健康チェック", SQLITE_TABLE_HEALTH, HEALTH_COLUMNS),
+        ("排泄チェック", SQLITE_TABLE_EXCRETION, EXCRETION_COLUMNS),
+        ("短期目標マスタ", SQLITE_TABLE_SHORT_GOAL_MASTER, SHORT_GOAL_MASTER_COLUMNS),
+        ("短期目標実施", SQLITE_TABLE_SHORT_GOAL_CHECKS, SHORT_GOAL_CHECK_COLUMNS),
+        ("モニタリング下書き", SQLITE_TABLE_MONITORING_DRAFTS, MONITORING_DRAFT_COLUMNS),
+        ("LIFE ADL評価", SQLITE_TABLE_LIFE_ADL, LIFE_ADL_COLUMNS),
+    ]
+    rows = []
+    for label, table, columns in targets:
+        try:
+            df = load_sqlite_table(table, columns)
+            if df.empty or "利用者名" not in df.columns:
+                continue
+            df = attach_user_ids(df)
+            if "user_id" not in df.columns:
+                df["user_id"] = ""
+            missing = df[df["user_id"].astype(str).str.strip() == ""]
+            for name, g in missing.groupby("利用者名", dropna=False):
+                name = clean_text(name)
+                if name:
+                    rows.append({
+                        "対象": label,
+                        "表記ゆれ名": name,
+                        "照合キー": normalize_user_name_for_match(name),
+                        "件数": len(g),
+                    })
+        except Exception:
+            pass
+    if not rows:
+        return pd.DataFrame(columns=["対象", "表記ゆれ名", "照合キー", "件数"])
+    out = pd.DataFrame(rows)
+    out = out.groupby(["表記ゆれ名", "照合キー"], as_index=False).agg({"対象": lambda s: " / ".join(sorted(set(s))), "件数": "sum"})
+    return out.sort_values(["件数", "表記ゆれ名"], ascending=[False, True]).reset_index(drop=True)
+
+
+def add_user_name_alias(alias_name, target_user_id, memo=""):
+    """管理者確認済みの表記ゆれ→user_id紐づけを追加する。"""
+    alias_name = clean_text(alias_name)
+    target_user_id = clean_text(target_user_id)
+    if not alias_name:
+        return False, "表記ゆれ名を入力してください。"
+    if not target_user_id:
+        return False, "紐づけ先利用者を選択してください。"
+    official_name = get_user_name_by_id(target_user_id)
+    if not official_name:
+        return False, "紐づけ先の正式利用者が見つかりません。"
+    if alias_name == official_name:
+        return False, "正式利用者名と同じ名前は登録不要です。"
+
+    df = load_user_name_aliases(include_disabled=True)
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    alias_id = "alias_" + hashlib.sha1(f"{alias_name}__{target_user_id}".encode("utf-8")).hexdigest()[:12]
+    # 同じ表記ゆれ名は最後の設定で上書きする。
+    df = df[df["表記ゆれ名"].astype(str) != alias_name].copy()
+    row = {
+        "alias_id": alias_id,
+        "表記ゆれ名": alias_name,
+        "紐づけ先 user_id": target_user_id,
+        "正式利用者名": official_name,
+        "有効/無効": "有効",
+        "備考": clean_text(memo),
+        "更新日時": now_text,
+        "更新者": current_login_user(),
+    }
+    df = pd.concat([df, pd.DataFrame([row], columns=USER_NAME_ALIAS_COLUMNS)], ignore_index=True)
+    save_user_name_aliases(df)
+    try:
+        add_audit_log("利用者名ゆれ紐づけ登録", SQLITE_TABLE_USER_NAME_ALIASES, alias_name, f"{alias_name} → {target_user_id} {official_name}")
+    except Exception:
+        pass
+    return True, f"{alias_name} → {official_name} として登録しました。"
+
+
+def apply_user_name_aliases_to_records():
+    """登録済みの表記ゆれマスタに基づき、未補完user_idだけを補完する。"""
+    targets = [
+        (SQLITE_TABLE_HEALTH, HEALTH_COLUMNS, ["記録日"], ["記録日", "利用者名"]),
+        (SQLITE_TABLE_EXCRETION, EXCRETION_COLUMNS, ["記録日"], ["記録日", "利用者名", "時間帯"]),
+        (SQLITE_TABLE_SHORT_GOAL_MASTER, SHORT_GOAL_MASTER_COLUMNS, ["開始日", "終了予定日"], ["目標ID"]),
+        (SQLITE_TABLE_SHORT_GOAL_CHECKS, SHORT_GOAL_CHECK_COLUMNS, ["日付"], ["記録ID"]),
+        (SQLITE_TABLE_MONITORING_DRAFTS, MONITORING_DRAFT_COLUMNS, ["作成日"], ["下書きID"]),
+        (SQLITE_TABLE_LIFE_ADL, LIFE_ADL_COLUMNS, ["評価日"], ["評価ID"]),
+    ]
+    rows = []
+    for table, columns, date_cols, unique_cols in targets:
+        df = load_sqlite_table(table, columns, date_cols=date_cols)
+        before = 0 if "user_id" not in df.columns else int((df["user_id"].astype(str).str.strip() == "").sum())
+        df2 = attach_user_ids(df)
+        after = int((df2["user_id"].astype(str).str.strip() == "").sum()) if "user_id" in df2.columns else len(df2)
+        save_sqlite_table(df2, table, columns, date_cols=date_cols, unique_cols=unique_cols)
+        rows.append({"テーブル": table, "件数": len(df2), "補完前未紐づけ": before, "補完後未紐づけ": after, "今回補完": max(before - after, 0)})
+    try:
+        add_audit_log("利用者名ゆれ紐づけ適用", SQLITE_TABLE_USER_NAME_ALIASES, "", "表記ゆれマスタに基づいて未補完user_idを補完")
+    except Exception:
+        pass
+    return pd.DataFrame(rows)
+
+
+def show_user_name_alias_master_menu():
+    """管理者確認済みの利用者名ゆれ紐づけマスタ。"""
+    if not is_admin_user():
+        st.warning("このメニューは管理者専用です。")
+        return
+
+    st.header("利用者名ゆれ紐づけマスタ")
+    st.caption("完全自動ではなく、管理者が確認した表記ゆれだけを user_id に紐づけます。正式な利用者名は画面表示に残し、内部だけ安全に統一します。")
+
+    tab1, tab2, tab3 = st.tabs(["未紐づけ候補", "マスタ編集", "補完実行"])
+
+    users = load_users(include_hidden=True)
+    user_options = []
+    user_label_to_id = {}
+    for _, row in users.iterrows():
+        uid = ensure_user_id_value(row.get("user_id", ""), row.get("利用者名", ""))
+        name = clean_text(row.get("利用者名"))
+        if uid and name:
+            label = f"{name}（{uid}）"
+            user_options.append(label)
+            user_label_to_id[label] = uid
+
+    with tab1:
+        st.subheader("未紐づけ候補")
+        st.info("ここに出る名前は、まだ正式利用者または登録済み表記ゆれに紐づいていない名称です。内容を確認して、必要なものだけマスタ登録してください。")
+        unmatched = build_unmatched_user_names_df()
+        if unmatched.empty:
+            st.success("未紐づけ候補はありません。")
+        else:
+            st.dataframe(unmatched, use_container_width=True, hide_index=True)
+            selected_alias = st.selectbox("登録する表記ゆれ名", unmatched["表記ゆれ名"].tolist(), key="alias_candidate_select")
+            selected_user = st.selectbox("紐づけ先の正式利用者", user_options, key="alias_candidate_user_select") if user_options else ""
+            memo = st.text_input("備考", value="未紐づけ候補から登録", key="alias_candidate_memo")
+            if st.button("この候補を紐づけマスタへ登録", type="primary", use_container_width=True):
+                ok, msg = add_user_name_alias(selected_alias, user_label_to_id.get(selected_user, ""), memo)
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+    with tab2:
+        st.subheader("マスタ編集")
+        aliases = load_user_name_aliases(include_disabled=True)
+        st.caption("表記ゆれ名を直接追加・無効化できます。紐づけ先 user_id は上の候補登録を使うと安全です。")
+        edited = st.data_editor(
+            aliases,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            column_config={
+                "有効/無効": st.column_config.SelectboxColumn("有効/無効", options=["有効", "無効"]),
+                "紐づけ先 user_id": st.column_config.TextColumn("紐づけ先 user_id"),
+                "正式利用者名": st.column_config.TextColumn("正式利用者名"),
+            },
+            key="user_name_alias_editor",
+        )
+        if st.button("マスタを保存", type="primary", use_container_width=True):
+            work = normalize_user_name_alias_df(edited)
+            # user_idから正式利用者名を補完する。存在しないuser_idは保存前に警告。
+            valid_ids = set(users["user_id"].astype(str).tolist()) if "user_id" in users.columns else set()
+            invalid = work[(work["紐づけ先 user_id"].astype(str) != "") & (~work["紐づけ先 user_id"].astype(str).isin(valid_ids))]
+            if not invalid.empty:
+                st.error("存在しない user_id が含まれています。候補登録から選ぶか、正式な user_id に修正してください。")
+                st.dataframe(invalid, use_container_width=True, hide_index=True)
+            else:
+                for idx, row in work.iterrows():
+                    uid = clean_text(row.get("紐づけ先 user_id"))
+                    name = get_user_name_by_id(uid)
+                    if name:
+                        work.at[idx, "正式利用者名"] = name
+                    work.at[idx, "更新日時"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    work.at[idx, "更新者"] = current_login_user()
+                save_user_name_aliases(work)
+                add_audit_log("利用者名ゆれ紐づけマスタ保存", SQLITE_TABLE_USER_NAME_ALIASES, "", "マスタを保存")
+                st.success("利用者名ゆれ紐づけマスタを保存しました。")
+                st.rerun()
+
+    with tab3:
+        st.subheader("登録済みマスタを既存データへ適用")
+        st.warning("この処理は、登録済みの表記ゆれマスタに一致した未補完データだけ user_id を入れます。名称自体は書き換えません。")
+        preview = apply_user_id_migration_preview()
+        st.dataframe(preview, use_container_width=True, hide_index=True)
+        confirm = st.checkbox("管理者が確認した紐づけマスタだけを既存データへ適用する", key="confirm_apply_aliases")
+        if st.button("利用者名ゆれ紐づけを適用", type="primary", use_container_width=True):
+            if not confirm:
+                st.error("確認チェックを入れてください。")
+            else:
+                result = apply_user_name_aliases_to_records()
+                st.success("登録済みの表記ゆれマスタに基づいて user_id を補完しました。")
+                st.dataframe(result, use_container_width=True, hide_index=True)
+                st.rerun()
 
 
 def ensure_excel_file(path, sheet_name, columns):
@@ -7295,7 +7584,7 @@ def logout_button():
 # =========================
 # Ver3.0 UI共通設定・共通部品
 # =========================
-APP_VERSION = "Ver4.0 利用者ID移行準備版"
+APP_VERSION = "Ver4.1 利用者名ゆれ紐づけマスタ版"
 APP_COPY = "押し間違えず、迷わず、観察して次につなぐ 現場OS"
 
 UI_COLORS = {
@@ -7309,7 +7598,7 @@ MENU_GROUPS_ADMIN = {
     "記録確認": ["過去データ管理", "排泄詳細管理", "実施履歴一覧", "短期目標データ管理"],
     "短期目標・LIFE": ["短期目標・モニタリング", "短期目標マスタ", "モニタリング下書き作成", "LIFE入力標準化", "管理者LIFE入力", "LIFE不足チェック", "LIFE CSV出力", "LIFE登録一覧", "加算シミュレーション"],
     "帳票・共有": ["家族向けレポート作成", "ひだまりレポートPDF", "データダウンロード"],
-    "設定・保守": ["利用者マスタ管理", "ログイン・職員ID管理", "セキュリティ・保守管理", "利用者ID移行チェック", "自分専用ダッシュボード設定", "メニューカテゴリ設定", "システム設定", "現場の気づき構造化・AI管理者支援"],
+    "設定・保守": ["利用者マスタ管理", "ログイン・職員ID管理", "セキュリティ・保守管理", "利用者ID移行チェック", "利用者名ゆれ紐づけマスタ", "自分専用ダッシュボード設定", "メニューカテゴリ設定", "システム設定", "現場の気づき構造化・AI管理者支援"],
 }
 
 MENU_GROUPS_STAFF = {"今日の入力": ["業務全体申し送り", "健康チェック入力", "排泄チェック入力", "日々の実施チェック"]}
@@ -10155,6 +10444,8 @@ elif menu == "利用者マスタ管理":
 # =========================
 elif menu == "利用者ID移行チェック" and is_admin_user():
     show_user_id_migration_check()
+elif menu == "利用者名ゆれ紐づけマスタ" and is_admin_user():
+    show_user_name_alias_master_menu()
 
 # =========================
 # ログイン・職員ID管理
