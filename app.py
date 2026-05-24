@@ -11,6 +11,10 @@ except Exception:
 import uuid
 from pathlib import Path
 from datetime import date, datetime, timedelta
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 from io import BytesIO
 import zipfile
 import sqlite3
@@ -47,6 +51,27 @@ st.set_page_config(
     page_icon="☀️",
     layout="wide",
 )
+
+# =========================
+# JST時刻統一（Ver4.3）
+# Streamlit Cloud等のUTCサーバーでも、記録日時・更新日時・監査ログ・バックアップ履歴を日本時間で統一する。
+# =========================
+JST = ZoneInfo("Asia/Tokyo") if ZoneInfo else None
+
+def now_jst_dt():
+    if JST:
+        return datetime.now(JST)
+    # zoneinfoが使えない環境向けのフォールバック
+    return datetime.utcnow() + timedelta(hours=9)
+
+def format_now_jst(fmt="%Y-%m-%d %H:%M:%S"):
+    return now_jst_dt().strftime(fmt)
+
+def now_jst():
+    return format_now_jst("%Y-%m-%d %H:%M:%S")
+
+def today_jst():
+    return now_jst_dt().date()
 
 
 
@@ -260,7 +285,7 @@ def set_app_setting(setting_key, value, category="一般設定", description="")
             "設定値": _json_dumps_safe(value),
             "分類": clean_text(category, "一般設定"),
             "説明": clean_text(description),
-            "更新日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "更新日時": format_now_jst("%Y-%m-%d %H:%M:%S"),
             "更新者": current_login_user() if "current_login_user" in globals() else "",
         }
         df = pd.concat([df, pd.DataFrame([row], columns=APP_SETTING_COLUMNS)], ignore_index=True)
@@ -557,7 +582,7 @@ def add_audit_log(operation, table_name="", target_key="", summary="", before=""
         df = load_sqlite_table(SQLITE_TABLE_AUDIT_LOGS, AUDIT_LOG_COLUMNS)
         row = {
             "監査ID": str(uuid.uuid4()),
-            "日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "日時": format_now_jst("%Y-%m-%d %H:%M:%S"),
             "ログインID": login_id,
             "表示名": label,
             "権限": role,
@@ -620,7 +645,7 @@ def record_backup_history(kind, file_path, result="成功", memo=""):
             pass
         row = {
             "バックアップID": str(uuid.uuid4()),
-            "日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "日時": format_now_jst("%Y-%m-%d %H:%M:%S"),
             "種類": kind,
             "ファイル名": Path(file_path).name if file_path else "",
             "サイズKB": size_kb,
@@ -643,7 +668,7 @@ def create_backup_zip(kind="手動"):
     商品版ではExcel/JSON互換ファイルをバックアップ対象にしません。
     """
     ensure_security_dirs()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = format_now_jst("%Y%m%d_%H%M%S")
     zip_path = BACKUP_DIR / f"hidamari_backup_{kind}_{timestamp}.zip"
 
     try:
@@ -676,13 +701,13 @@ def run_daily_auto_backup():
     """1日1回だけ自動バックアップを作成する。"""
     try:
         ensure_security_dirs()
-        today_key = date.today().strftime("%Y%m%d")
+        today_key = today_jst().strftime("%Y%m%d")
         marker = BACKUP_DIR / f".auto_backup_{today_key}.done"
         if marker.exists():
             return
         zip_path, err = create_backup_zip(kind="自動")
         if zip_path and not err:
-            marker.write_text(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+            marker.write_text(format_now_jst("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
             # 古い自動バックアップは30世代程度に整理
             auto_files = sorted(BACKUP_DIR.glob("hidamari_backup_自動_*.zip"), key=lambda x: x.stat().st_mtime, reverse=True)
             for old in auto_files[30:]:
@@ -708,7 +733,7 @@ def restore_from_backup_zip(uploaded_file):
 
     try:
         filename = clean_text(getattr(uploaded_file, "name", "restore.zip"), "restore.zip")
-        restore_zip_path = RESTORE_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}"
+        restore_zip_path = RESTORE_DIR / f"{format_now_jst('%Y%m%d_%H%M%S')}_{filename}"
         uploaded_file.seek(0)
         restore_zip_path.write_bytes(uploaded_file.read())
 
@@ -800,7 +825,7 @@ def show_security_maintenance_menu():
             st.download_button(
                 "監査ログをExcelでダウンロード",
                 data=to_excel_download(view),
-                file_name=f"audit_logs_{date.today().strftime('%Y%m%d')}.xlsx",
+                file_name=f"audit_logs_{today_jst().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
@@ -1556,7 +1581,7 @@ def add_user_name_alias(alias_name, target_user_id, memo=""):
         return False, "正式利用者名と同じ名前は登録不要です。"
 
     df = load_user_name_aliases(include_disabled=True)
-    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_text = format_now_jst("%Y-%m-%d %H:%M:%S")
     alias_id = "alias_" + hashlib.sha1(f"{alias_name}__{target_user_id}".encode("utf-8")).hexdigest()[:12]
     # 同じ表記ゆれ名は最後の設定で上書きする。
     df = df[df["表記ゆれ名"].astype(str) != alias_name].copy()
@@ -1675,7 +1700,7 @@ def show_user_name_alias_master_menu():
                     name = get_user_name_by_id(uid)
                     if name:
                         work.at[idx, "正式利用者名"] = name
-                    work.at[idx, "更新日時"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    work.at[idx, "更新日時"] = format_now_jst("%Y-%m-%d %H:%M:%S")
                     work.at[idx, "更新者"] = current_login_user()
                 save_user_name_aliases(work)
                 add_audit_log("利用者名ゆれ紐づけマスタ保存", SQLITE_TABLE_USER_NAME_ALIASES, "", "マスタを保存")
@@ -1728,11 +1753,11 @@ def format_weight_value(value):
 def build_latest_weight_summary(health_df, users=None, target_date=None):
     """利用者ごとの最新体重を返す。体重0・空欄は未測定として扱う。"""
     if target_date is None:
-        target_date = date.today()
+        target_date = today_jst()
     try:
         target_date = pd.to_datetime(target_date).date()
     except Exception:
-        target_date = date.today()
+        target_date = today_jst()
 
     users = users or []
     rows = []
@@ -1903,7 +1928,7 @@ def upgrade_account_password_hash(login_id: str, password: str):
         current_hash = clean_text(accounts.at[idx, "パスワードハッシュ"])
         if password_hash_needs_upgrade(current_hash):
             accounts.at[idx, "パスワードハッシュ"] = hash_password(password)
-            accounts.at[idx, "更新日時"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            accounts.at[idx, "更新日時"] = format_now_jst("%Y-%m-%d %H:%M:%S")
             save_accounts(accounts)
             try:
                 add_audit_log("パスワードハッシュ自動移行", "login_account_master", login_id, "旧形式からbcryptへ自動移行")
@@ -1915,7 +1940,7 @@ def upgrade_account_password_hash(login_id: str, password: str):
 
 def default_account_rows():
     """初期アカウントを返す。DBが空の場合のみ使用する。"""
-    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_text = format_now_jst("%Y-%m-%d %H:%M:%S")
     return [
         {
             "ログインID": "kanri",
@@ -2072,7 +2097,7 @@ def save_login_history(df):
 def add_login_history(login_id, label, role, result, memo=""):
     df = load_login_history()
     row = {
-        "日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "日時": format_now_jst("%Y-%m-%d %H:%M:%S"),
         "ログインID": clean_text(login_id).lower(),
         "表示名": clean_text(label),
         "権限": clean_text(role),
@@ -2128,7 +2153,7 @@ def update_account_password(login_id, new_password, force_change="いいえ"):
     if not matches:
         return False, "アカウントが見つかりません。"
     idx = matches[-1]
-    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_text = format_now_jst("%Y-%m-%d %H:%M:%S")
     accounts.at[idx, "パスワードハッシュ"] = hash_password(new_password)
     accounts.at[idx, "初回パスワード変更必須"] = "はい" if force_change in [True, "はい", "1", "true"] else "いいえ"
     accounts.at[idx, "最終パスワード変更日時"] = now_text
@@ -2233,10 +2258,10 @@ def show_login_user_management_menu():
                             st.error(pw_msg)
                             st.stop()
                         accounts.at[idx, "パスワードハッシュ"] = hash_password(new_password)
-                        accounts.at[idx, "最終パスワード変更日時"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        accounts.at[idx, "最終パスワード変更日時"] = format_now_jst("%Y-%m-%d %H:%M:%S")
                     accounts.at[idx, "初回パスワード変更必須"] = "はい" if force_change_next else "いいえ"
                     accounts.at[idx, "備考"] = clean_text(memo)
-                    accounts.at[idx, "更新日時"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    accounts.at[idx, "更新日時"] = format_now_jst("%Y-%m-%d %H:%M:%S")
                     save_accounts(accounts)
                     add_audit_log("アカウント更新", "login_accounts", selected_id, "アカウント情報を更新")
                     st.success("アカウントを更新しました。")
@@ -2292,7 +2317,7 @@ def show_login_user_management_menu():
                 if login_id in accounts["ログインID"].tolist():
                     st.error("同じログインIDが既に存在します。")
                 else:
-                    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    now_text = format_now_jst("%Y-%m-%d %H:%M:%S")
                     row = {
                         "ログインID": login_id,
                         "表示名": clean_text(new_label, login_id),
@@ -2336,7 +2361,7 @@ def show_login_user_management_menu():
             st.download_button(
                 "表示中のログイン履歴をExcelでダウンロード",
                 data=output.getvalue(),
-                file_name=f"login_history_{date.today().strftime('%Y%m%d')}.xlsx",
+                file_name=f"login_history_{today_jst().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
@@ -3351,9 +3376,9 @@ def parse_photo_ocr_text(raw_text, default_user, year, month, input_staff=""):
         # 体温または血圧がある行だけ候補化
         if temp or bp_high or bp_low or pulse:
             try:
-                record_date = date(int(year), int(month), int(day)) if day else date.today()
+                record_date = date(int(year), int(month), int(day)) if day else today_jst()
             except Exception:
-                record_date = date.today()
+                record_date = today_jst()
 
             rows.append({
                 "取り込む": True,
@@ -3387,8 +3412,8 @@ def make_blank_photo_import_rows(default_user, year, month):
             next_month = date(year, month + 1, 1)
         last_day = (next_month - timedelta(days=1)).day
     except Exception:
-        year = date.today().year
-        month = date.today().month
+        year = today_jst().year
+        month = today_jst().month
         last_day = 31
 
     for d in range(1, last_day + 1):
@@ -3413,7 +3438,7 @@ def make_blank_photo_import_rows(default_user, year, month):
 
 def photo_import_rows_to_health_records(df, input_staff):
     records = []
-    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_text = format_now_jst("%Y-%m-%d %H:%M:%S")
 
     for _, row in df.iterrows():
         if not bool(row.get("取り込む", False)):
@@ -3470,9 +3495,9 @@ def show_photo_import_menu():
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        target_year = st.number_input("対象年", min_value=2024, max_value=2035, value=date.today().year, step=1, key="photo_import_year")
+        target_year = st.number_input("対象年", min_value=2024, max_value=2035, value=today_jst().year, step=1, key="photo_import_year")
     with c2:
-        target_month = st.number_input("対象月", min_value=1, max_value=12, value=date.today().month, step=1, key="photo_import_month")
+        target_month = st.number_input("対象月", min_value=1, max_value=12, value=today_jst().month, step=1, key="photo_import_month")
     with c3:
         default_user = st.selectbox("主な利用者名", active_users, key="photo_import_default_user")
     with c4:
@@ -3797,7 +3822,7 @@ def show_life_standardization_menu():
         adl_df = load_life_adl_data()
         c1, c2, c3 = st.columns(3)
         with c1:
-            eval_date = st.date_input("評価日", value=date.today(), key="life_adl_eval_date")
+            eval_date = st.date_input("評価日", value=today_jst(), key="life_adl_eval_date")
         with c2:
             user_name = st.selectbox("利用者名", active_users, key="life_adl_user")
         with c3:
@@ -3846,7 +3871,7 @@ def show_life_standardization_menu():
                 "認知・行動": cognitive,
                 "評価メモ": clean_text(memo),
                 "入力者": clean_text(input_staff),
-                "登録日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "登録日時": format_now_jst("%Y-%m-%d %H:%M:%S"),
             }
             action = upsert_life_adl_record(record)
             st.success(f"ADL月次評価を{action}しました。")
@@ -3860,7 +3885,7 @@ def show_life_standardization_menu():
 
     with tab2:
         st.subheader("月次不足チェック")
-        today = date.today()
+        today = today_jst()
         c1, c2 = st.columns(2)
         with c1:
             target_year = st.number_input("年", min_value=2024, max_value=2035, value=today.year, step=1)
@@ -4352,7 +4377,7 @@ def show_addon_simulation_menu():
     st.download_button(
         "加算シミュレーション結果をExcelでダウンロード",
         data=output.getvalue(),
-        file_name=f"大和市_GH_加算シミュレーション_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+        file_name=f"大和市_GH_加算シミュレーション_{format_now_jst('%Y%m%d_%H%M')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
@@ -4411,10 +4436,10 @@ def save_business_handover_data(df):
 
 def make_business_handover_id(record_date, shift_type, staff_name):
     d = pd.to_datetime(record_date, errors="coerce")
-    date_text = d.strftime("%Y%m%d") if not pd.isna(d) else datetime.now().strftime("%Y%m%d")
+    date_text = d.strftime("%Y%m%d") if not pd.isna(d) else format_now_jst("%Y%m%d")
     staff_text = clean_text(staff_name, "未入力").replace(" ", "").replace("　", "")
     shift_text = clean_text(shift_type, "勤務")
-    now_text = datetime.now().strftime("%H%M%S")
+    now_text = format_now_jst("%H%M%S")
     return f"BH-{date_text}-{shift_text}-{staff_text}-{now_text}"
 
 
@@ -4449,7 +4474,7 @@ def get_business_handover_in_progress(df, exclude_today=False):
     work = work[work["対応状況"] == "対応中"].copy()
 
     if exclude_today:
-        today_value = date.today()
+        today_value = today_jst()
         work = work[work["日付"].dt.date != today_value].copy()
 
     if not work.empty:
@@ -5025,7 +5050,7 @@ def show_alert_condition_master_menu():
             st.success("全条件を使用ONにしました。")
             st.rerun()
     with c3:
-        preview_date = st.date_input("抽出プレビュー日", value=date.today(), key="alert_condition_preview_date")
+        preview_date = st.date_input("抽出プレビュー日", value=today_jst(), key="alert_condition_preview_date")
 
     df = load_alert_condition_master()
     enabled_count = int(df["使用"].astype(bool).sum()) if "使用" in df.columns else 0
@@ -5062,7 +5087,7 @@ def show_alert_condition_master_menu():
 
     if submitted:
         saved_df = save_alert_condition_master(edited)
-        st.session_state["alert_condition_master_saved_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        st.session_state["alert_condition_master_saved_at"] = format_now_jst("%Y-%m-%d %H:%M:%S")
         st.success(f"条件マスタを保存しました。使用ON：{int(saved_df['使用'].astype(bool).sum())}件。業務全体申し送りの自動抽出に反映されます。")
         st.rerun()
 
@@ -5150,7 +5175,7 @@ def show_business_handover_menu():
 
         # 先に本日の申し送りを表示し、その下に対応中案件、その下に入力欄を置く
         st.subheader("本日の業務全体申し送り")
-        today_df = get_business_handover_by_date(df, date.today())
+        today_df = get_business_handover_by_date(df, today_jst())
         if today_df.empty:
             st.info("本日の業務全体申し送りはまだありません。")
         else:
@@ -5166,7 +5191,7 @@ def show_business_handover_menu():
         with st.form("business_handover_form", clear_on_submit=False):
             c1, c2, c3 = st.columns(3)
             with c1:
-                record_date = st.date_input("日付", value=date.today(), key="business_handover_date")
+                record_date = st.date_input("日付", value=today_jst(), key="business_handover_date")
             with c2:
                 shift_type = st.selectbox("勤務帯", ["日勤", "夜勤"], index=0, key="business_handover_shift")
             with c3:
@@ -5265,7 +5290,7 @@ def show_business_handover_menu():
                 "Excel自動抽出情報": auto_extract_text,
                 "入力Excelファイル": input_excel_path,
                 "入力Excel表示情報": input_excel_display_text,
-                "記録日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "記録日時": format_now_jst("%Y-%m-%d %H:%M:%S"),
             }
 
             df = pd.concat([df, pd.DataFrame([new_record], columns=BUSINESS_HANDOVER_COLUMNS)], ignore_index=True)
@@ -5286,8 +5311,8 @@ def show_business_handover_menu():
 
         valid_dates = work["日付"].dropna()
         if valid_dates.empty:
-            default_start = date.today() - timedelta(days=7)
-            default_end = date.today()
+            default_start = today_jst() - timedelta(days=7)
+            default_end = today_jst()
         else:
             default_start = valid_dates.min().date()
             default_end = valid_dates.max().date()
@@ -5383,7 +5408,7 @@ def show_business_handover_menu():
 
         selected_date = pd.to_datetime(selected_row.get("日付"), errors="coerce")
         if pd.isna(selected_date):
-            selected_date_value = date.today()
+            selected_date_value = today_jst()
         else:
             selected_date_value = selected_date.date()
 
@@ -5516,7 +5541,7 @@ def show_business_handover_menu():
             df_update.loc[mask, "Excel自動抽出情報"] = update_auto_extract_text
             df_update.loc[mask, "入力Excelファイル"] = current_input_excel
             df_update.loc[mask, "入力Excel表示情報"] = current_input_excel_text
-            df_update.loc[mask, "記録日時"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            df_update.loc[mask, "記録日時"] = format_now_jst("%Y-%m-%d %H:%M:%S")
 
             save_business_handover_data(df_update)
             st.success("業務全体申し送りを更新しました。")
@@ -5753,9 +5778,9 @@ def show_short_goal_master():
         with col1:
             user_name = st.selectbox("利用者名", users, key="goal_user")
         with col2:
-            start_date = st.date_input("開始日", value=date.today(), key="goal_start")
+            start_date = st.date_input("開始日", value=today_jst(), key="goal_start")
         with col3:
-            end_date = st.date_input("終了予定日", value=date.today(), key="goal_end")
+            end_date = st.date_input("終了予定日", value=today_jst(), key="goal_end")
         short_goal = st.text_area("短期目標", placeholder="例：午前中に居室からリビングへ移動し、他利用者と過ごす時間を持つ")
         support = st.text_area("支援内容", placeholder="例：声かけ、歩行時の見守り、必要時は手を添える")
         col4, col5 = st.columns(2)
@@ -5778,7 +5803,7 @@ def show_short_goal_master():
                 "終了予定日": end_date.strftime("%Y-%m-%d"),
                 "状態": status,
                 "備考": clean_text(memo),
-                "登録日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "登録日時": format_now_jst("%Y-%m-%d %H:%M:%S"),
             }
             df = pd.concat([df, pd.DataFrame([new_row], columns=SHORT_GOAL_MASTER_COLUMNS)], ignore_index=True)
             save_short_goal_master(df)
@@ -5800,7 +5825,7 @@ def show_daily_goal_check():
 
     col1, col2 = st.columns(2)
     with col1:
-        check_date = st.date_input("日付", value=date.today(), key="daily_goal_date")
+        check_date = st.date_input("日付", value=today_jst(), key="daily_goal_date")
     with col2:
         user_name = st.selectbox("利用者名", users, key="daily_goal_user")
 
@@ -5847,7 +5872,7 @@ def show_daily_goal_check():
             "職員メモ": clean_text(staff_memo),
             "入力職員": clean_text(staff_name),
             "モニタリング反映": reflect,
-            "登録日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "登録日時": format_now_jst("%Y-%m-%d %H:%M:%S"),
         }
         check_df = pd.concat([check_df, pd.DataFrame([new_row], columns=SHORT_GOAL_CHECK_COLUMNS)], ignore_index=True)
         save_short_goal_checks(check_df)
@@ -5867,9 +5892,9 @@ def show_goal_history():
     with col1:
         user_name = st.selectbox("利用者名", ["全員"] + users, key="goal_history_user")
     with col2:
-        start_date = st.date_input("開始日", value=date(date.today().year, date.today().month, 1), key="goal_history_start")
+        start_date = st.date_input("開始日", value=date(today_jst().year, today_jst().month, 1), key="goal_history_start")
     with col3:
-        end_date = st.date_input("終了日", value=date.today(), key="goal_history_end")
+        end_date = st.date_input("終了日", value=today_jst(), key="goal_history_end")
 
     filtered = df.copy()
     filtered["日付_dt"] = pd.to_datetime(filtered["日付"], errors="coerce")
@@ -5887,7 +5912,7 @@ def show_goal_history():
     st.download_button(
         "表示中データをExcelでダウンロード",
         data=to_excel_download(show_df),
-        file_name=f"短期目標実施履歴_{date.today().strftime('%Y-%m-%d')}.xlsx",
+        file_name=f"短期目標実施履歴_{today_jst().strftime('%Y-%m-%d')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
@@ -5968,7 +5993,7 @@ def show_monitoring_draft():
     with col1:
         user_name = st.selectbox("利用者名", users, key="monitoring_user")
     with col2:
-        target_month_date = st.date_input("対象月", value=date.today(), key="monitoring_month")
+        target_month_date = st.date_input("対象月", value=today_jst(), key="monitoring_month")
 
     target_month = ym_str(target_month_date)
     tmp = check_df.copy()
@@ -6015,7 +6040,7 @@ def show_monitoring_draft():
         if st.button("この下書きを保存", use_container_width=True):
             new_row = {
                 "下書きID": str(uuid.uuid4()),
-                "作成日": date.today().strftime("%Y-%m-%d"),
+                "作成日": today_jst().strftime("%Y-%m-%d"),
                 "対象月": target_month,
                 "利用者名": user_name,
                 "短期目標": selected_goal,
@@ -6027,7 +6052,7 @@ def show_monitoring_draft():
                 "未実施理由まとめ": reasons,
                 "モニタリング下書き": edited_draft,
                 "今後の方向性": direction,
-                "作成日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "作成日時": format_now_jst("%Y-%m-%d %H:%M:%S"),
             }
             draft_df = pd.concat([draft_df, pd.DataFrame([new_row], columns=MONITORING_DRAFT_COLUMNS)], ignore_index=True)
             save_monitoring_drafts(draft_df)
@@ -6373,7 +6398,7 @@ def monitoring_table_to_excel(user_name, target_month, rows_df, summary_text, is
 
     info = [
         ("A3", "入居者名", "B3", user_name),
-        ("D3", "記入日", "E3", date.today().strftime("%Y/%m/%d")),
+        ("D3", "記入日", "E3", today_jst().strftime("%Y/%m/%d")),
         ("G3", "対象月", "H3", target_month),
         ("A4", "当今確認職員", "B4", current_login_user()),
         ("D4", "総合判定", "E4", ""),
@@ -6461,7 +6486,7 @@ def show_ai_monitoring_table_builder():
     with c1:
         user_name = st.selectbox("利用者名", users, key="ai_monitoring_user")
     with c2:
-        target_month_date = st.date_input("対象月", value=date.today(), key="ai_monitoring_month")
+        target_month_date = st.date_input("対象月", value=today_jst(), key="ai_monitoring_month")
     with c3:
         use_ai = st.checkbox("AIで文章を整える", value=False, help="OpenAI APIキー設定時のみ使用できます。未設定でも通常下書きは作成できます。")
 
@@ -6525,7 +6550,7 @@ def show_short_goal_data_management():
                 st.download_button(
                     f"{label}をExcelでダウンロード",
                     data=to_excel_download(df),
-                    file_name=f"{label}_{date.today().strftime('%Y-%m-%d')}.xlsx",
+                    file_name=f"{label}_{today_jst().strftime('%Y-%m-%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=f"download_short_goal_{label}",
                     use_container_width=True,
@@ -6662,9 +6687,9 @@ def show_admin_data_download_menu():
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        start_date = st.date_input("開始日", value=date.today().replace(day=1), key="export_start_date")
+        start_date = st.date_input("開始日", value=today_jst().replace(day=1), key="export_start_date")
     with c2:
-        end_date = st.date_input("終了日", value=date.today(), key="export_end_date")
+        end_date = st.date_input("終了日", value=today_jst(), key="export_end_date")
     with c3:
         user_filter = st.selectbox("利用者で絞り込み", ["全員"] + active_users, key="export_user_filter")
 
@@ -6694,7 +6719,7 @@ def show_admin_data_download_menu():
                 st.dataframe(df.head(50), use_container_width=True, hide_index=True)
 
     excel_bytes = dataframe_to_excel_bytes(sheets)
-    file_name = f"hidamari_selected_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    file_name = f"hidamari_selected_data_{format_now_jst('%Y%m%d_%H%M%S')}.xlsx"
     st.download_button(
         "選択したデータをExcelでダウンロード",
         data=excel_bytes,
@@ -6726,7 +6751,7 @@ def show_admin_backup_download():
         st.download_button(
             label="作成済みバックアップZIPをダウンロード",
             data=st.session_state["admin_backup_zip_bytes"],
-            file_name=st.session_state.get("admin_backup_zip_name", f"hidamari_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"),
+            file_name=st.session_state.get("admin_backup_zip_name", f"hidamari_backup_{format_now_jst('%Y%m%d_%H%M%S')}.zip"),
             mime="application/zip",
             use_container_width=True,
         )
@@ -7502,7 +7527,7 @@ def show_structured_insight_menu():
     with c1:
         user_name = st.selectbox("分析する利用者", users, key="structured_insight_user")
     with c2:
-        end_day = st.date_input("分析基準日", value=date.today(), key="structured_insight_end_day")
+        end_day = st.date_input("分析基準日", value=today_jst(), key="structured_insight_end_day")
 
     health_df = load_health_data()
     ex_df = load_excretion_data()
@@ -7552,7 +7577,7 @@ def show_structured_insight_menu():
             logs = load_ai_insight_logs()
             rule_text = "\n".join(["【気づき】"] + result["findings"] + ["【確認ポイント】"] + result["checks"] + ["【短期目標】"] + result["goal_summary"])
             new_row = {
-                "作成日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "作成日時": format_now_jst("%Y-%m-%d %H:%M:%S"),
                 "分析基準日": end_day,
                 "利用者名": user_name,
                 "対象期間": f"{end_day - timedelta(days=6)}〜{end_day}",
@@ -8460,7 +8485,7 @@ def show_manager_life_input():
 
     with st.form("life_manager_form"):
         user_name = st.selectbox("利用者名", active_users)
-        target_month = st.text_input("対象月", value=datetime.now().strftime("%Y-%m"))
+        target_month = st.text_input("対象月", value=format_now_jst("%Y-%m"))
 
         st.subheader("ADL評価")
         c1, c2, c3, c4 = st.columns(4)
@@ -8730,7 +8755,7 @@ def show_system_settings_menu():
             st.download_button(
                 "設定一覧をExcelでダウンロード",
                 data=to_excel_download(settings_df),
-                file_name=f"app_settings_{date.today().strftime('%Y%m%d')}.xlsx",
+                file_name=f"app_settings_{today_jst().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
@@ -8812,7 +8837,7 @@ def show_custom_dashboard_page():
     st.header("自分専用ダッシュボード")
     st.caption("『自分専用ダッシュボード設定』で選択した項目だけを表示します。")
 
-    check_date = st.date_input("確認日", value=date.today(), key="custom_dashboard_check_date")
+    check_date = st.date_input("確認日", value=today_jst(), key="custom_dashboard_check_date")
     show_my_dashboard_blocks(check_date)
 
 def show_custom_dashboard_settings():
@@ -8870,7 +8895,7 @@ def show_my_dashboard_blocks(target_date=None):
     enabled = load_dashboard_settings(username)
 
     if target_date is None:
-        target_date = date.today()
+        target_date = today_jst()
 
 
     if not enabled:
@@ -8999,7 +9024,7 @@ if menu == "管理者ダッシュボード":
 
     health_df = load_health_data()
     ex_df = load_excretion_data()
-    today = date.today()
+    today = today_jst()
     yesterday = today - timedelta(days=1)
 
     st.markdown(
@@ -9181,7 +9206,7 @@ elif menu == "健康チェック入力":
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        record_date = st.date_input("記録日", value=date.today(), key="health_date")
+        record_date = st.date_input("記録日", value=today_jst(), key="health_date")
     with col2:
         user_name = st.selectbox("利用者名", active_users, key="health_user")
     with col3:
@@ -9319,7 +9344,7 @@ elif menu == "健康チェック入力":
             "LIFE補助メモ": life_memo,
             "家族共有メモ": family_memo,
             "気になる変化": changes,
-            "登録日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "登録日時": format_now_jst("%Y-%m-%d %H:%M:%S"),
             "入力者": input_staff,
         }
 
@@ -9365,7 +9390,7 @@ elif menu == "排泄チェック入力":
     # まず日付を選ぶ。日付が変わると未入力一覧も切り替わる。
     top1, top2 = st.columns([1, 2])
     with top1:
-        record_date = st.date_input("記録日", value=date.today(), key="ex_input_date")
+        record_date = st.date_input("記録日", value=today_jst(), key="ex_input_date")
 
     # 利用者・入力者選択
     col1, col2 = st.columns(2)
@@ -9485,7 +9510,7 @@ elif menu == "排泄チェック入力":
                 "便性状": stool_type,
                 "排泄メモ": memo,
                 "入力者": input_staff,
-                "登録日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "登録日時": format_now_jst("%Y-%m-%d %H:%M:%S"),
             })
 
         st.markdown("####  日中帯（9時?17時）")
@@ -9629,7 +9654,7 @@ elif menu == "過去データ管理":
         else:
             col1, col2 = st.columns(2)
             with col1:
-                key_date = st.date_input("記録日", value=date.today(), key="past_health_date")
+                key_date = st.date_input("記録日", value=today_jst(), key="past_health_date")
             with col2:
                 key_user = st.selectbox("利用者名", all_users, key="past_health_user")
 
@@ -9698,7 +9723,7 @@ elif menu == "過去データ管理":
                         "LIFE補助メモ": clean_text(row.get("LIFE補助メモ", "")),
                         "家族共有メモ": family_memo,
                         "気になる変化": changes,
-                        "登録日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "登録日時": format_now_jst("%Y-%m-%d %H:%M:%S"),
                         "入力者": staff,
                     }
                     action = upsert_health_record(record)
@@ -9731,8 +9756,8 @@ elif menu == "過去データ管理":
             health_df = load_health_data()
             if not health_df.empty:
                 health_df["記録日"] = pd.to_datetime(health_df["記録日"], errors="coerce")
-                year = st.number_input("年", min_value=2024, max_value=2035, value=date.today().year, step=1, key="past_health_year")
-                month = st.number_input("月", min_value=1, max_value=12, value=date.today().month, step=1, key="past_health_month")
+                year = st.number_input("年", min_value=2024, max_value=2035, value=today_jst().year, step=1, key="past_health_year")
+                month = st.number_input("月", min_value=1, max_value=12, value=today_jst().month, step=1, key="past_health_month")
                 user_filter = st.selectbox("利用者で絞り込み", ["全員"] + all_users, key="past_health_filter_user")
 
                 result = health_df[
@@ -9758,7 +9783,7 @@ elif menu == "過去データ管理":
         st.subheader("入力状況")
         st.caption("指定日の健康チェック、排泄チェック、日々の実施チェック、業務全体申し送りの入力状況を一覧で確認します。")
 
-        target_day = st.date_input("確認日", value=date.today(), key="past_input_status_date")
+        target_day = st.date_input("確認日", value=today_jst(), key="past_input_status_date")
         user_filter = st.selectbox("利用者で絞り込み", ["全員"] + all_users, key="past_input_status_user")
 
         health_df = load_health_data()
@@ -9850,7 +9875,7 @@ elif menu == "過去データ管理":
         st.subheader("注意記録")
         st.caption("条件設定マスタに基づいて、健康チェック・排泄チェックから注意候補を抽出します。診断ではなく、申し送り候補の確認です。")
 
-        target_day = st.date_input("抽出日", value=date.today(), key="past_alert_date")
+        target_day = st.date_input("抽出日", value=today_jst(), key="past_alert_date")
         alert_df = build_handover_alerts_by_condition(target_day)
 
         if alert_df.empty:
@@ -9902,9 +9927,9 @@ elif menu == "過去データ管理":
 
             c1, c2, c3 = st.columns(3)
             with c1:
-                from_day = st.date_input("開始日", value=date.today() - timedelta(days=30), key="past_handover_from")
+                from_day = st.date_input("開始日", value=today_jst() - timedelta(days=30), key="past_handover_from")
             with c2:
-                to_day = st.date_input("終了日", value=date.today(), key="past_handover_to")
+                to_day = st.date_input("終了日", value=today_jst(), key="past_handover_to")
             with c3:
                 keyword = st.text_input("キーワード", key="past_handover_keyword", placeholder="申し送り・要確認事項など")
 
@@ -9963,7 +9988,7 @@ elif menu == "過去データ管理":
                     with st.form("past_handover_update_form"):
                         uc1, uc2, uc3 = st.columns(3)
                         with uc1:
-                            edit_date = st.date_input("日付", value=pd.to_datetime(row.get("日付"), errors="coerce").date() if not pd.isna(pd.to_datetime(row.get("日付"), errors="coerce")) else date.today(), key="past_handover_edit_date")
+                            edit_date = st.date_input("日付", value=pd.to_datetime(row.get("日付"), errors="coerce").date() if not pd.isna(pd.to_datetime(row.get("日付"), errors="coerce")) else today_jst(), key="past_handover_edit_date")
                         with uc2:
                             edit_shift = st.selectbox("勤務帯", ["日勤", "夜勤"], index=0 if clean_text(row.get("勤務帯"), "日勤") == "日勤" else 1, key="past_handover_edit_shift")
                         with uc3:
@@ -9995,7 +10020,7 @@ elif menu == "過去データ管理":
                             update_df.loc[mask, "全体申し送り"] = edit_main
                             update_df.loc[mask, "要確認事項"] = edit_confirm
                             update_df.loc[mask, "Excel自動抽出情報"] = edit_auto
-                            update_df.loc[mask, "記録日時"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            update_df.loc[mask, "記録日時"] = format_now_jst("%Y-%m-%d %H:%M:%S")
                             save_business_handover_data(update_df)
                             try:
                                 add_audit_log("申し送り更新", SQLITE_TABLE_HANDOVER, selected_id, "過去データ管理から更新")
@@ -10043,9 +10068,9 @@ elif menu == "排泄詳細管理":
     with col1:
         ex_user = st.selectbox("利用者", ["全員"] + all_users, key="ex_admin_user")
     with col2:
-        start_date = st.date_input("開始日", value=date.today(), key="ex_admin_start")
+        start_date = st.date_input("開始日", value=today_jst(), key="ex_admin_start")
     with col3:
-        end_date = st.date_input("終了日", value=date.today(), key="ex_admin_end")
+        end_date = st.date_input("終了日", value=today_jst(), key="ex_admin_end")
 
     work = ex_df.copy()
     work["記録日"] = pd.to_datetime(work["記録日"], errors="coerce")
@@ -10123,7 +10148,7 @@ elif menu == "排泄詳細管理":
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        key_date = st.date_input("更新対象日", value=date.today(), key="ex_edit_date")
+        key_date = st.date_input("更新対象日", value=today_jst(), key="ex_edit_date")
     with c2:
         key_user = st.selectbox("更新対象利用者", all_users, key="ex_edit_user")
     with c3:
@@ -10181,7 +10206,7 @@ elif menu == "排泄詳細管理":
             "便性状": stool_type,
             "排泄メモ": memo,
             "入力者": staff,
-            "登録日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "登録日時": format_now_jst("%Y-%m-%d %H:%M:%S"),
         }
         action = upsert_excretion_record(record)
         st.success(f"排泄データを{action}しました。")
@@ -10220,9 +10245,9 @@ elif menu == "家族向けレポート作成":
     with col1:
         report_user = st.selectbox("利用者", all_users, key="family_report_user")
     with col2:
-        report_year = st.number_input("対象年", min_value=2024, max_value=2035, value=date.today().year, step=1)
+        report_year = st.number_input("対象年", min_value=2024, max_value=2035, value=today_jst().year, step=1)
     with col3:
-        report_month = st.number_input("対象月", min_value=1, max_value=12, value=date.today().month, step=1)
+        report_month = st.number_input("対象月", min_value=1, max_value=12, value=today_jst().month, step=1)
 
     health_df = load_health_data()
     ex_df = load_excretion_data()
@@ -10256,9 +10281,9 @@ elif menu == "ひだまりレポートPDF":
     with col1:
         pdf_user = st.selectbox("利用者", all_users, key="pdf_user")
     with col2:
-        pdf_year = st.number_input("対象年", min_value=2024, max_value=2035, value=date.today().year, step=1, key="pdf_year")
+        pdf_year = st.number_input("対象年", min_value=2024, max_value=2035, value=today_jst().year, step=1, key="pdf_year")
     with col3:
-        pdf_month = st.number_input("対象月", min_value=1, max_value=12, value=date.today().month, step=1, key="pdf_month")
+        pdf_month = st.number_input("対象月", min_value=1, max_value=12, value=today_jst().month, step=1, key="pdf_month")
 
     if st.button("ひだまりレポートPDFを作成する"):
         try:
@@ -10304,9 +10329,9 @@ elif menu == "管理者支援":
         with col1:
             ai_user = st.selectbox("利用者", all_users, key="ai_user")
         with col2:
-            ai_year = st.number_input("対象年", min_value=2024, max_value=2035, value=date.today().year, step=1, key="ai_year")
+            ai_year = st.number_input("対象年", min_value=2024, max_value=2035, value=today_jst().year, step=1, key="ai_year")
         with col3:
-            ai_month = st.number_input("対象月", min_value=1, max_value=12, value=date.today().month, step=1, key="ai_month")
+            ai_month = st.number_input("対象月", min_value=1, max_value=12, value=today_jst().month, step=1, key="ai_month")
 
         summary = create_family_summary_text(health_df, ex_df, ai_user, ai_year, ai_month)
         st.text_area("家族向け文章", value=summary, height=360)
@@ -10322,9 +10347,9 @@ elif menu == "管理者支援":
             with col2:
                 graph_item = st.selectbox("項目", ["体温", "血圧上", "血圧下", "脈拍", "SpO2", "体重", "朝食摂取率", "昼食摂取率", "夕食摂取率"], key="graph_item")
             with col3:
-                graph_year = st.number_input("年", min_value=2024, max_value=2035, value=date.today().year, step=1, key="graph_year")
+                graph_year = st.number_input("年", min_value=2024, max_value=2035, value=today_jst().year, step=1, key="graph_year")
             with col4:
-                graph_month = st.number_input("月", min_value=1, max_value=12, value=date.today().month, step=1, key="graph_month")
+                graph_month = st.number_input("月", min_value=1, max_value=12, value=today_jst().month, step=1, key="graph_month")
 
             target = get_month_health_data(health_df, graph_user, graph_year, graph_month)
             if target.empty:
@@ -10348,9 +10373,9 @@ elif menu == "管理者支援":
             with col1:
                 change_user = st.selectbox("利用者", all_users, key="change_user")
             with col2:
-                change_year = st.number_input("年", min_value=2024, max_value=2035, value=date.today().year, step=1, key="change_year")
+                change_year = st.number_input("年", min_value=2024, max_value=2035, value=today_jst().year, step=1, key="change_year")
             with col3:
-                change_month = st.number_input("月", min_value=1, max_value=12, value=date.today().month, step=1, key="change_month")
+                change_month = st.number_input("月", min_value=1, max_value=12, value=today_jst().month, step=1, key="change_month")
 
             change_target = get_month_health_data(health_df, change_user, change_year, change_month)
 
@@ -10415,9 +10440,9 @@ elif menu == "管理者支援":
         with col1:
             prompt_user = st.selectbox("利用者", all_users, key="prompt_user")
         with col2:
-            prompt_year = st.number_input("年", min_value=2024, max_value=2035, value=date.today().year, step=1, key="prompt_year")
+            prompt_year = st.number_input("年", min_value=2024, max_value=2035, value=today_jst().year, step=1, key="prompt_year")
         with col3:
-            prompt_month = st.number_input("月", min_value=1, max_value=12, value=date.today().month, step=1, key="prompt_month")
+            prompt_month = st.number_input("月", min_value=1, max_value=12, value=today_jst().month, step=1, key="prompt_month")
 
         target_h = get_month_health_data(health_df, prompt_user, prompt_year, prompt_month)
         target_e = get_month_excretion_data(ex_df, prompt_user, prompt_year, prompt_month)
@@ -10447,13 +10472,13 @@ elif menu == "管理者支援":
 
     with tab5:
         st.subheader("申し送り支援")
-        target_date = st.date_input("対象日", value=date.today(), key="handover_date")
+        target_date = st.date_input("対象日", value=today_jst(), key="handover_date")
         handover = create_handover_text(health_df, ex_df, target_date)
         st.text_area("申し送り案", value=handover, height=360)
 
     with tab6:
         st.subheader("注意通知")
-        alert_date = st.date_input("注意通知の対象日", value=date.today(), key="alert_date")
+        alert_date = st.date_input("注意通知の対象日", value=today_jst(), key="alert_date")
         alert_df = build_handover_alerts_by_condition(alert_date)
 
         if alert_df.empty:
@@ -10473,7 +10498,7 @@ elif menu == "管理者支援":
     with tab8:
         st.subheader("体重未測定確認")
         st.caption("体重は測定した日だけ入力します。14日以上測定が空いている場合だけ確認対象にします。")
-        check_day = st.date_input("確認日", value=date.today(), key="weight_overdue_check_day")
+        check_day = st.date_input("確認日", value=today_jst(), key="weight_overdue_check_day")
         show_latest_weight_block(health_df, all_users, check_day)
         show_weight_overdue_block(health_df, all_users, check_day, threshold_days=14)
 
