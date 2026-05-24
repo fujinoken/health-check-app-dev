@@ -129,6 +129,7 @@ LIFE_ADL_FILE = DATA_DIR / "life_adl_assessment_data.xlsx"
 ALERT_CONDITION_FILE = DATA_DIR / "handover_alert_condition_master.xlsx"
 ACCOUNT_FILE = DATA_DIR / "login_account_master.xlsx"
 LOGIN_HISTORY_FILE = DATA_DIR / "login_history.xlsx"
+MENU_CATEGORY_SETTINGS_FILE = DATA_DIR / "menu_category_settings.json"
 
 
 # =========================
@@ -6908,10 +6909,186 @@ MENU_GROUPS_ADMIN = {
     "記録確認": ["過去データ管理", "排泄詳細管理", "実施履歴一覧", "短期目標データ管理"],
     "短期目標・LIFE": ["短期目標・モニタリング", "短期目標マスタ", "モニタリング下書き作成", "LIFE入力標準化", "管理者LIFE入力", "LIFE不足チェック", "LIFE CSV出力", "LIFE登録一覧", "加算シミュレーション"],
     "帳票・共有": ["家族向けレポート作成", "ひだまりレポートPDF", "データダウンロード"],
-    "設定・保守": ["利用者マスタ管理", "ログイン・職員ID管理", "セキュリティ・保守管理", "自分専用ダッシュボード設定", "現場の気づき構造化・AI管理者支援"],
+    "設定・保守": ["利用者マスタ管理", "ログイン・職員ID管理", "セキュリティ・保守管理", "自分専用ダッシュボード設定", "メニューカテゴリ設定", "現場の気づき構造化・AI管理者支援"],
 }
 
 MENU_GROUPS_STAFF = {"今日の入力": ["業務全体申し送り", "健康チェック入力", "排泄チェック入力", "日々の実施チェック"]}
+
+
+def get_standard_menu_groups(role="admin"):
+    """標準メニューカテゴリ。自己設定の初期値として使う。"""
+    return MENU_GROUPS_ADMIN if role == "admin" else MENU_GROUPS_STAFF
+
+
+def make_menu_category_rows_from_groups(groups, role="admin"):
+    """カテゴリ辞書を編集用DataFrame行へ変換する。"""
+    rows = []
+    sort_no = 10
+    for category, menus in groups.items():
+        menu_no = 10
+        for menu_name in menus:
+            rows.append({
+                "表示": True,
+                "カテゴリ": clean_text(category, "その他"),
+                "メニュー": clean_text(menu_name),
+                "並び順": sort_no + menu_no / 100,
+                "備考": "標準" if role == "admin" else "職員",
+            })
+            menu_no += 10
+        sort_no += 100
+    return rows
+
+
+def get_standard_menu_category_df(role="admin"):
+    groups = get_standard_menu_groups(role)
+    return normalize_menu_category_df(pd.DataFrame(make_menu_category_rows_from_groups(groups, role=role)))
+
+
+def normalize_menu_category_df(df):
+    """メニューカテゴリ自己設定の列・型・並びを整える。"""
+    columns = ["表示", "カテゴリ", "メニュー", "並び順", "備考"]
+    if df is None or df.empty:
+        df = pd.DataFrame(columns=columns)
+    work = df.copy()
+    for col in columns:
+        if col not in work.columns:
+            work[col] = ""
+    work = work[columns].copy()
+    work["表示"] = work["表示"].map(lambda x: str(x).lower() in ["true", "1", "yes", "有", "表示", "on"] if not isinstance(x, bool) else x)
+    work["カテゴリ"] = work["カテゴリ"].map(lambda x: clean_text(x, "その他"))
+    work["メニュー"] = work["メニュー"].map(lambda x: clean_text(x))
+    work["並び順"] = pd.to_numeric(work["並び順"], errors="coerce").fillna(9999)
+    work["備考"] = work["備考"].map(lambda x: clean_text(x))
+    work = work[work["メニュー"] != ""].drop_duplicates(subset=["メニュー"], keep="last")
+    return work.sort_values(["カテゴリ", "並び順", "メニュー"]).reset_index(drop=True)
+
+
+def load_menu_category_settings(role="admin"):
+    """管理者が編集したメニューカテゴリ設定を読み込む。なければ標準設定を使う。"""
+    ensure_dirs()
+    role = "admin" if role == "admin" else "staff"
+    standard_df = get_standard_menu_category_df(role)
+    settings = {}
+    if MENU_CATEGORY_SETTINGS_FILE.exists():
+        try:
+            settings = json.loads(MENU_CATEGORY_SETTINGS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            settings = {}
+    rows = settings.get(role, [])
+    if rows:
+        df = normalize_menu_category_df(pd.DataFrame(rows))
+    else:
+        df = standard_df.copy()
+
+    # 新機能追加時に自己設定へ自動追記する。既存のカテゴリ変更は維持する。
+    existing_menus = set(df["メニュー"].astype(str).tolist())
+    missing = standard_df[~standard_df["メニュー"].astype(str).isin(existing_menus)]
+    if not missing.empty:
+        df = pd.concat([df, missing], ignore_index=True)
+
+    # 管理者が設定画面を非表示にしても復帰できるよう、必ず表示する。
+    if role == "admin" and "メニューカテゴリ設定" in standard_df["メニュー"].tolist():
+        if "メニューカテゴリ設定" not in df["メニュー"].tolist():
+            add = standard_df[standard_df["メニュー"] == "メニューカテゴリ設定"]
+            df = pd.concat([df, add], ignore_index=True)
+        df.loc[df["メニュー"] == "メニューカテゴリ設定", "表示"] = True
+
+    return normalize_menu_category_df(df)
+
+
+def save_menu_category_settings(df, role="admin"):
+    """メニューカテゴリ自己設定をJSONへ保存する。"""
+    ensure_dirs()
+    role = "admin" if role == "admin" else "staff"
+    clean_df = normalize_menu_category_df(df)
+    if role == "admin" and "メニューカテゴリ設定" in clean_df["メニュー"].tolist():
+        clean_df.loc[clean_df["メニュー"] == "メニューカテゴリ設定", "表示"] = True
+    settings = {}
+    if MENU_CATEGORY_SETTINGS_FILE.exists():
+        try:
+            settings = json.loads(MENU_CATEGORY_SETTINGS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            settings = {}
+    settings[role] = clean_df.to_dict(orient="records")
+    MENU_CATEGORY_SETTINGS_FILE.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        add_audit_log("メニューカテゴリ設定更新", "menu_category_settings", role, "メニューカテゴリ自己設定を保存")
+    except Exception:
+        pass
+
+
+def reset_menu_category_settings(role="admin"):
+    """自己設定を標準設定に戻す。"""
+    df = get_standard_menu_category_df(role)
+    save_menu_category_settings(df, role=role)
+
+
+def build_menu_groups_from_settings(role="admin"):
+    """自己設定からサイドバー用カテゴリ辞書を作る。"""
+    df = load_menu_category_settings(role)
+    df = df[df["表示"] == True].copy()
+    if df.empty:
+        return get_standard_menu_groups(role)
+    df = df.sort_values(["並び順", "カテゴリ", "メニュー"])
+    groups = {}
+    for _, row in df.iterrows():
+        category = clean_text(row.get("カテゴリ"), "その他")
+        menu_name = clean_text(row.get("メニュー"))
+        if not menu_name:
+            continue
+        groups.setdefault(category, [])
+        if menu_name not in groups[category]:
+            groups[category].append(menu_name)
+    return groups
+
+
+def show_menu_category_settings_menu():
+    """管理者がサイドバーのカテゴリ・表示順・表示有無を自己設定する画面。"""
+    if not is_admin_user():
+        st.warning("このメニューは管理者専用です。")
+        return
+
+    ui_section("メニューカテゴリ設定", "標準設定をもとに、管理者自身でサイドバーのカテゴリ名・並び順・表示有無を調整できます。", "🧭")
+    ui_card("使い方", "カテゴリ名を書き換えると、左メニューのカテゴリ分けが変わります。表示チェックを外すとメニューを一時的に隠せます。『メニューカテゴリ設定』は復帰用として常に表示されます。", "", soft=True)
+
+    role_target = st.radio("設定対象", ["管理者メニュー", "職員メニュー"], horizontal=True, key="menu_category_role_target")
+    role_key = "admin" if role_target == "管理者メニュー" else "staff"
+
+    df = load_menu_category_settings(role_key)
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        column_config={
+            "表示": st.column_config.CheckboxColumn("表示"),
+            "カテゴリ": st.column_config.TextColumn("カテゴリ", help="例：朝の確認、日々の入力、設定・保守"),
+            "メニュー": st.column_config.TextColumn("メニュー", disabled=True, help="機能名は固定です。カテゴリと並び順を変更してください。"),
+            "並び順": st.column_config.NumberColumn("並び順", step=1, help="小さい数字ほど上に表示されます。"),
+            "備考": st.column_config.TextColumn("備考"),
+        },
+        key=f"menu_category_editor_{role_key}",
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("自己設定を保存", type="primary", use_container_width=True):
+            save_menu_category_settings(edited, role=role_key)
+            st.success("メニューカテゴリ設定を保存しました。左メニューに反映します。")
+            st.rerun()
+    with col2:
+        if st.button("標準設定に戻す", use_container_width=True):
+            reset_menu_category_settings(role=role_key)
+            st.success("標準設定に戻しました。")
+            st.rerun()
+
+    st.divider()
+    st.subheader("現在の表示プレビュー")
+    preview_groups = build_menu_groups_from_settings(role_key)
+    for cat, menus in preview_groups.items():
+        st.markdown(f"**{cat}**")
+        st.write(" / ".join(menus))
+
 
 
 def get_ui_theme():
@@ -7031,7 +7208,7 @@ def flatten_menu_groups(groups):
 
 def render_sidebar_menu(role):
     """Ver3.0メニュー。カテゴリ選択＋メニュー選択でiPadでも迷いにくくする。"""
-    groups = MENU_GROUPS_ADMIN if role == "admin" else MENU_GROUPS_STAFF
+    groups = build_menu_groups_from_settings(role)
     filtered_flat = filter_admin_menus(flatten_menu_groups(groups))
     with st.sidebar:
         st.markdown(f'<div class="sidebar-title">ひだまり</div><div class="sidebar-sub">{APP_VERSION}<br>{APP_COPY}</div>', unsafe_allow_html=True)
@@ -8960,6 +9137,9 @@ elif menu == "管理者支援":
 # =========================
 # 利用者マスタ管理
 # =========================
+elif menu == "メニューカテゴリ設定":
+    show_menu_category_settings_menu()
+
 elif menu == "データダウンロード":
     show_admin_data_download_menu()
 
