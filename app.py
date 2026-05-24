@@ -8074,159 +8074,290 @@ def ui_badges(items):
 
 def apply_product_ui_ux():
     """
-    Ver3.5 商品化UI/UX追加CSS。
-    目的：iPad/Fire HD/古いWindowsでも、押し間違えにくく、迷いにくく、疲れにくい画面にする。
+    Ver4.4 余白を守るOS UI。
+    目的：情報密度を下げ、白背景・行間・カード余白・ボタン間隔を広げ、現場が焦らず操作できる画面にする。
+    画像・イラスト風の装飾は表示せず、記録と確認に集中できる余白を優先する。
     """
     st.markdown(
         """
         <style>
-        /* ===== 商品化UI：全体の読みやすさ ===== */
+        /* ===== 余白を守るOS：全体 ===== */
         html, body, [class*="css"] {
             -webkit-text-size-adjust: 100%;
-        }
-        .block-container {
-            padding-top: 1.0rem !important;
-            padding-left: 1.15rem !important;
-            padding-right: 1.15rem !important;
+            line-height: 1.78 !important;
         }
 
-        /* ===== 商品化UI：大きなタップ領域 ===== */
+        .stApp {
+            background: #FFFFFF !important;
+        }
+
+        .block-container {
+            max-width: 1180px !important;
+            padding-top: 1.8rem !important;
+            padding-left: 2.1rem !important;
+            padding-right: 2.1rem !important;
+            padding-bottom: 4.5rem !important;
+        }
+
+        /* ===== 余白を守るOS：見出し ===== */
+        h1, h2, h3 {
+            letter-spacing: .02em !important;
+            line-height: 1.45 !important;
+            margin-top: 1.3rem !important;
+            margin-bottom: .9rem !important;
+        }
+        h1 { font-size: 1.95rem !important; }
+        h2 { font-size: 1.48rem !important; }
+        h3 { font-size: 1.2rem !important; }
+
+        p, li, div, span {
+            line-height: 1.78;
+        }
+
+        /* ===== 余白を守るOS：サイドバーも白基調 ===== */
+        [data-testid="stSidebar"] {
+            background: #FFFFFF !important;
+            border-right: 1px solid #E7E1D8 !important;
+            min-width: 300px;
+        }
+        [data-testid="stSidebar"] .stRadio label {
+            background: #FFFFFF !important;
+            border: 1px solid #E7E1D8 !important;
+            border-radius: 16px !important;
+            padding: 12px 13px !important;
+            margin: 8px 0 !important;
+            line-height: 1.55 !important;
+        }
+        [data-testid="stSidebar"] .stRadio label:hover {
+            border-color: #C9705C !important;
+            background: #FFFDF9 !important;
+        }
+
+        /* ===== 余白を守るOS：ボタン間隔を広げる ===== */
+        div[data-testid="stButton"],
+        div[data-testid="stDownloadButton"] {
+            margin-top: .45rem !important;
+            margin-bottom: .75rem !important;
+        }
         div[data-testid="stButton"] button,
         div[data-testid="stDownloadButton"] button {
-            min-height: 58px !important;
-            border-radius: 18px !important;
-            font-size: 1.03rem !important;
-            font-weight: 800 !important;
+            min-height: 62px !important;
+            border-radius: 20px !important;
+            font-size: 1.02rem !important;
+            font-weight: 750 !important;
             letter-spacing: .02em;
             white-space: normal !important;
-            line-height: 1.35 !important;
-            box-shadow: 0 4px 12px rgba(45, 64, 55, 0.06);
+            line-height: 1.45 !important;
+            box-shadow: none !important;
+            border: 1px solid #E7E1D8 !important;
+            background: #FFFFFF !important;
         }
         div[data-testid="stButton"] button:focus,
         div[data-testid="stDownloadButton"] button:focus,
         input:focus,
         textarea:focus {
-            outline: 3px solid rgba(201,112,92,.25) !important;
-            outline-offset: 2px !important;
+            outline: 3px solid rgba(201,112,92,.20) !important;
+            outline-offset: 3px !important;
         }
 
-        /* ===== 商品化UI：入力欄の押しやすさ ===== */
+        /* ===== 余白を守るOS：入力欄 ===== */
         div[data-baseweb="select"] > div,
         input,
         textarea,
         .stTextInput input,
         .stNumberInput input,
         .stDateInput input {
-            min-height: 54px !important;
+            min-height: 58px !important;
             font-size: 1.02rem !important;
-            border-radius: 16px !important;
+            border-radius: 18px !important;
+            line-height: 1.65 !important;
+            background: #FFFFFF !important;
         }
         textarea {
-            min-height: 120px !important;
-            line-height: 1.65 !important;
+            min-height: 140px !important;
+            line-height: 1.85 !important;
+            padding-top: 14px !important;
+            padding-bottom: 14px !important;
+        }
+        label, .stMarkdown {
+            line-height: 1.75 !important;
         }
 
-        /* ===== 商品化UI：ラジオ・チェックの押しやすさ ===== */
+        /* ===== 余白を守るOS：ラジオ・チェック ===== */
         div[role="radiogroup"] label,
         label[data-baseweb="checkbox"] {
-            min-height: 44px !important;
-            padding-top: 6px !important;
-            padding-bottom: 6px !important;
+            min-height: 50px !important;
+            padding-top: 9px !important;
+            padding-bottom: 9px !important;
+            margin-bottom: 6px !important;
             font-size: 1.0rem !important;
+            line-height: 1.6 !important;
         }
 
-        /* ===== 商品化UI：カード・余白 ===== */
+        /* ===== 余白を守るOS：カード ===== */
         .ui-card,
         .ui-card-soft,
         .mindset-box,
         .check-card,
         .stop-card,
         .staff-welcome,
-        .admin-welcome {
-            border-radius: 22px !important;
-            padding: 18px 20px !important;
-            margin: 12px 0 18px 0 !important;
+        .admin-welcome,
+        .safe-note,
+        .danger-note,
+        .info-box {
+            background: #FFFFFF !important;
+            border-radius: 26px !important;
+            padding: 24px 26px !important;
+            margin: 18px 0 26px 0 !important;
+            border: 1px solid #E7E1D8 !important;
+            box-shadow: none !important;
+            line-height: 1.85 !important;
+        }
+        .ui-card-soft,
+        .mindset-box,
+        .safe-note {
+            background: #FFFDF9 !important;
+        }
+        .danger-note {
+            background: #FFF8F4 !important;
         }
         .ui-card strong,
         .ui-card-soft strong,
         .mindset-title {
-            font-size: 1.07rem !important;
+            font-size: 1.08rem !important;
+            line-height: 1.6 !important;
         }
 
-        /* ===== 商品化UI：サイドバー階層メニュー ===== */
-        [data-testid="stSidebar"] {
-            min-width: 300px;
+        .ui-section-title {
+            margin: 26px 0 12px 0 !important;
+            gap: 12px !important;
+            line-height: 1.5 !important;
         }
-        [data-testid="stSidebar"] .stRadio label {
-            background: rgba(255,255,255,.72);
-            border: 1px solid var(--hidamari-border);
-            border-radius: 14px;
-            padding: 8px 10px;
-            margin: 5px 0;
+        .ui-section-caption {
+            margin-bottom: 22px !important;
+            line-height: 1.85 !important;
+            color: #666666 !important;
         }
-        [data-testid="stSidebar"] .stRadio label:hover {
-            border-color: var(--hidamari-accent);
-            background: #ffffff;
-        }
-        [data-testid="stSidebar"] div[data-baseweb="select"] > div {
-            background: #ffffff;
-            border: 1px solid var(--hidamari-border);
+        .ui-badge, .mini-badge {
+            background: #FFFFFF !important;
+            border: 1px solid #E7E1D8 !important;
+            padding: 7px 13px !important;
+            margin: 5px 7px 5px 0 !important;
+            line-height: 1.5 !important;
+            box-shadow: none !important;
         }
 
-        /* ===== 商品化UI：表の視認性 ===== */
+        /* ===== 余白を守るOS：タブ ===== */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 12px !important;
+            flex-wrap: wrap !important;
+            margin-bottom: 18px !important;
+        }
+        .stTabs [data-baseweb="tab"] {
+            min-height: 52px !important;
+            border-radius: 999px !important;
+            padding: 12px 18px !important;
+            background: #FFFFFF !important;
+            border: 1px solid #E7E1D8 !important;
+            line-height: 1.45 !important;
+        }
+
+        /* ===== 余白を守るOS：表 ===== */
         div[data-testid="stDataFrame"] {
-            border-radius: 18px;
+            border-radius: 22px !important;
             overflow: hidden;
-            border: 1px solid var(--hidamari-border);
+            border: 1px solid #E7E1D8 !important;
+            margin-top: 16px !important;
+            margin-bottom: 24px !important;
+            box-shadow: none !important;
         }
 
-        /* ===== 商品化UI：危険操作の目立たせ方 ===== */
-        .danger-note {
-            background: #FFF3EE;
-            border: 1px solid #E6B6A7;
-            border-left: 6px solid #C9705C;
-            color: #6A3B30;
-            border-radius: 18px;
-            padding: 14px 16px;
-            margin: 10px 0 14px 0;
-            line-height: 1.65;
-        }
-        .safe-note {
-            background: #F1F7F4;
-            border: 1px solid #BFD8CC;
-            border-left: 6px solid #2F6F5E;
-            color: #2E5148;
-            border-radius: 18px;
-            padding: 14px 16px;
-            margin: 10px 0 14px 0;
-            line-height: 1.65;
+        /* ===== 余白を守るOS：イラスト・装飾画像を非表示 ===== */
+        .hidamari-illust-row,
+        .hidamari-illust-card,
+        .hidamari-emoji,
+        img[alt*="イラスト"],
+        img[alt*="illustration"] {
+            display: none !important;
         }
 
-        /* ===== 商品化UI：iPad/Fire HD向け ===== */
+        /* ヒーローは画像なし・白基調の静かな案内にする */
+        .hidamari-hero {
+            background: #FFFFFF !important;
+            border: 1px solid #E7E1D8 !important;
+            border-radius: 28px !important;
+            padding: 30px 28px !important;
+            margin: 12px auto 34px auto !important;
+            max-width: 920px !important;
+            text-align: left !important;
+            box-shadow: none !important;
+        }
+        .hidamari-hero-title {
+            font-size: 1.9rem !important;
+            line-height: 1.45 !important;
+            margin-bottom: 14px !important;
+        }
+        .hidamari-hero-sub {
+            font-size: 1.03rem !important;
+            line-height: 1.9 !important;
+            color: #666666 !important;
+            margin-bottom: 0 !important;
+        }
+
+        /* ===== 余白を守るOS：列間も少し広げる ===== */
+        div[data-testid="column"] {
+            padding-left: .35rem !important;
+            padding-right: .35rem !important;
+        }
+
+        /* ===== 余白を守るOS：iPad/Fire HD ===== */
         @media (max-width: 1100px) {
             .block-container {
-                padding-left: .75rem !important;
-                padding-right: .75rem !important;
+                padding-left: 1.0rem !important;
+                padding-right: 1.0rem !important;
+                padding-top: 1.3rem !important;
             }
             div[data-testid="column"] {
                 min-width: 100% !important;
                 flex: 1 1 100% !important;
+                padding-left: 0 !important;
+                padding-right: 0 !important;
             }
             div[data-testid="stButton"] button,
             div[data-testid="stDownloadButton"] button {
-                min-height: 62px !important;
-                font-size: 1.08rem !important;
+                min-height: 66px !important;
+                font-size: 1.06rem !important;
             }
             .stTabs [data-baseweb="tab"] {
-                min-height: 46px !important;
-                padding: 10px 16px !important;
+                min-height: 54px !important;
+                padding: 13px 18px !important;
+            }
+            .ui-card,
+            .ui-card-soft,
+            .mindset-box,
+            .check-card,
+            .stop-card,
+            .staff-welcome,
+            .admin-welcome,
+            .safe-note,
+            .danger-note,
+            .info-box {
+                padding: 20px 18px !important;
+                margin: 16px 0 24px 0 !important;
+                border-radius: 22px !important;
+            }
+            .hidamari-hero {
+                padding: 24px 20px !important;
+                border-radius: 24px !important;
+            }
+            .hidamari-hero-title {
+                font-size: 1.5rem !important;
             }
         }
         </style>
         """,
         unsafe_allow_html=True,
     )
-
 
 def product_ui_notice():
     """商品化UIの短い案内。画面冒頭で必要に応じて使う。"""
