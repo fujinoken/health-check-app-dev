@@ -7162,8 +7162,8 @@ def logout_button():
 # =========================
 # Ver3.0 UI共通設定・共通部品
 # =========================
-APP_VERSION = "Ver3.1 現場OSマインド実装版"
-APP_COPY = "観察して、共有して、次につなぐ 現場OS"
+APP_VERSION = "Ver3.5 UI/UX商品化版"
+APP_COPY = "押し間違えず、迷わず、観察して次につなぐ 現場OS"
 
 UI_COLORS = {
     "staff": {"bg": "#FFFDF7", "surface": "#FFFFFF", "surface_soft": "#FFF7EC", "accent": "#C9705C", "accent_dark": "#8F4C3E", "sub": "#6A5B52", "border": "#E8D7C5"},
@@ -7511,6 +7511,180 @@ def ui_badges(items):
         st.markdown(html, unsafe_allow_html=True)
 
 
+def apply_product_ui_ux():
+    """
+    Ver3.5 商品化UI/UX追加CSS。
+    目的：iPad/Fire HD/古いWindowsでも、押し間違えにくく、迷いにくく、疲れにくい画面にする。
+    """
+    st.markdown(
+        """
+        <style>
+        /* ===== 商品化UI：全体の読みやすさ ===== */
+        html, body, [class*="css"] {
+            -webkit-text-size-adjust: 100%;
+        }
+        .block-container {
+            padding-top: 1.0rem !important;
+            padding-left: 1.15rem !important;
+            padding-right: 1.15rem !important;
+        }
+
+        /* ===== 商品化UI：大きなタップ領域 ===== */
+        div[data-testid="stButton"] button,
+        div[data-testid="stDownloadButton"] button {
+            min-height: 58px !important;
+            border-radius: 18px !important;
+            font-size: 1.03rem !important;
+            font-weight: 800 !important;
+            letter-spacing: .02em;
+            white-space: normal !important;
+            line-height: 1.35 !important;
+            box-shadow: 0 4px 12px rgba(45, 64, 55, 0.06);
+        }
+        div[data-testid="stButton"] button:focus,
+        div[data-testid="stDownloadButton"] button:focus,
+        input:focus,
+        textarea:focus {
+            outline: 3px solid rgba(201,112,92,.25) !important;
+            outline-offset: 2px !important;
+        }
+
+        /* ===== 商品化UI：入力欄の押しやすさ ===== */
+        div[data-baseweb="select"] > div,
+        input,
+        textarea,
+        .stTextInput input,
+        .stNumberInput input,
+        .stDateInput input {
+            min-height: 54px !important;
+            font-size: 1.02rem !important;
+            border-radius: 16px !important;
+        }
+        textarea {
+            min-height: 120px !important;
+            line-height: 1.65 !important;
+        }
+
+        /* ===== 商品化UI：ラジオ・チェックの押しやすさ ===== */
+        div[role="radiogroup"] label,
+        label[data-baseweb="checkbox"] {
+            min-height: 44px !important;
+            padding-top: 6px !important;
+            padding-bottom: 6px !important;
+            font-size: 1.0rem !important;
+        }
+
+        /* ===== 商品化UI：カード・余白 ===== */
+        .ui-card,
+        .ui-card-soft,
+        .mindset-box,
+        .check-card,
+        .stop-card,
+        .staff-welcome,
+        .admin-welcome {
+            border-radius: 22px !important;
+            padding: 18px 20px !important;
+            margin: 12px 0 18px 0 !important;
+        }
+        .ui-card strong,
+        .ui-card-soft strong,
+        .mindset-title {
+            font-size: 1.07rem !important;
+        }
+
+        /* ===== 商品化UI：サイドバー階層メニュー ===== */
+        [data-testid="stSidebar"] {
+            min-width: 300px;
+        }
+        [data-testid="stSidebar"] .stRadio label {
+            background: rgba(255,255,255,.72);
+            border: 1px solid var(--hidamari-border);
+            border-radius: 14px;
+            padding: 8px 10px;
+            margin: 5px 0;
+        }
+        [data-testid="stSidebar"] .stRadio label:hover {
+            border-color: var(--hidamari-accent);
+            background: #ffffff;
+        }
+        [data-testid="stSidebar"] div[data-baseweb="select"] > div {
+            background: #ffffff;
+            border: 1px solid var(--hidamari-border);
+        }
+
+        /* ===== 商品化UI：表の視認性 ===== */
+        div[data-testid="stDataFrame"] {
+            border-radius: 18px;
+            overflow: hidden;
+            border: 1px solid var(--hidamari-border);
+        }
+
+        /* ===== 商品化UI：危険操作の目立たせ方 ===== */
+        .danger-note {
+            background: #FFF3EE;
+            border: 1px solid #E6B6A7;
+            border-left: 6px solid #C9705C;
+            color: #6A3B30;
+            border-radius: 18px;
+            padding: 14px 16px;
+            margin: 10px 0 14px 0;
+            line-height: 1.65;
+        }
+        .safe-note {
+            background: #F1F7F4;
+            border: 1px solid #BFD8CC;
+            border-left: 6px solid #2F6F5E;
+            color: #2E5148;
+            border-radius: 18px;
+            padding: 14px 16px;
+            margin: 10px 0 14px 0;
+            line-height: 1.65;
+        }
+
+        /* ===== 商品化UI：iPad/Fire HD向け ===== */
+        @media (max-width: 1100px) {
+            .block-container {
+                padding-left: .75rem !important;
+                padding-right: .75rem !important;
+            }
+            div[data-testid="column"] {
+                min-width: 100% !important;
+                flex: 1 1 100% !important;
+            }
+            div[data-testid="stButton"] button,
+            div[data-testid="stDownloadButton"] button {
+                min-height: 62px !important;
+                font-size: 1.08rem !important;
+            }
+            .stTabs [data-baseweb="tab"] {
+                min-height: 46px !important;
+                padding: 10px 16px !important;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def product_ui_notice():
+    """商品化UIの短い案内。画面冒頭で必要に応じて使う。"""
+    st.markdown(
+        '<div class="safe-note"><strong>現場OSの使い方：</strong>大きく押す、迷ったら戻る、記録は責めるためではなく次の人へ渡すために残します。</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def danger_note(text):
+    """削除・復元などの危険操作用の共通表示。"""
+    st.markdown(f'<div class="danger-note">{clean_text(text)}</div>', unsafe_allow_html=True)
+
+
+def safe_note(text):
+    """通常の安心メッセージ用の共通表示。"""
+    st.markdown(f'<div class="safe-note">{clean_text(text)}</div>', unsafe_allow_html=True)
+
+
 
 
 def os_mindset_box(title, body, icon="📝"):
@@ -7625,7 +7799,20 @@ def render_sidebar_menu(role):
         st.caption(f"ログイン：{st.session_state.get('user_label', '')}")
         st.divider()
         if role != "admin":
-            return st.radio("今日のメニュー", filtered_flat, key="main_menu_staff")
+            category_names = list(groups.keys())
+            if not category_names:
+                category_names = ["今日の入力"]
+                groups = {"今日の入力": filtered_flat}
+            default_category = st.session_state.get("main_menu_category_staff", category_names[0])
+            if default_category not in category_names:
+                default_category = category_names[0]
+            category = st.selectbox("カテゴリ", category_names, index=category_names.index(default_category), key="main_menu_category_staff")
+            menu_options = [m for m in groups.get(category, []) if m in filtered_flat]
+            if not menu_options:
+                menu_options = filtered_flat
+            selected = st.radio("メニュー", menu_options, key=f"main_menu_staff_{category}")
+            ui_badges(["大ボタン", "タッチ操作", "押し間違い防止"])
+            return selected
         category_names = list(groups.keys())
         default_category = st.session_state.get("main_menu_category", category_names[0])
         if default_category not in category_names:
@@ -7639,11 +7826,12 @@ def render_sidebar_menu(role):
         selected = st.radio("メニュー", menu_options, index=menu_index, key=f"main_menu_selected_{category}")
         st.session_state["main_menu_selected"] = selected
         st.divider()
-        ui_badges(["Ver3.0", "iPad対応", "UI共通化"])
+        ui_badges(["Ver3.5", "大ボタン", "カードUI", "押し間違い防止"])
         return selected
 
 
 apply_design()
+apply_product_ui_ux()
 
 if not login_check():
     st.stop()
@@ -7661,6 +7849,8 @@ if st.session_state.role == "admin":
 else:
     show_hidamari_hero("staff")
     show_staff_encouragement()
+
+product_ui_notice()
 
 
 # =========================
