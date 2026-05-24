@@ -1,13 +1,15 @@
-# ひだまり 健康チェック管理システム Ver3.3.2
+# ひだまり健康チェック管理システム Ver3.7 DB層分離版
 
-## 修正内容
-- Streamlitの自動ページメニューに `app / admin / dashboard / excretion / health input / life` が出ないよう、`pages/` フォルダを削除しました。
-- 起動ファイルは `app.py` のままです。
-- 本体は `services/legacy_app.py` に退避しています。
-- 将来の画面分離用メモは `app_pages/` に置いています。
+## 起動ファイル
+- app.py
 
-## GitHubへアップロードするもの
-このフォルダの中身すべてをアップロードしてください。
+## 追加フォルダ
+- db/database.py
+  - SQLite接続
+  - WAL設定
+  - トランザクション
+  - save/load
+  - DB整合性チェック
 
-## Streamlit Cloud設定
-Main file path: `app.py`
+## 注意
+GitHubには、このZIPを展開した中身をすべてアップロードしてください。
