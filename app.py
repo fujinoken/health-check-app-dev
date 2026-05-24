@@ -150,6 +150,8 @@ SQLITE_TABLE_ACCOUNTS = "login_accounts"
 SQLITE_TABLE_LOGIN_HISTORY = "login_history"
 SQLITE_TABLE_USERS = "users"
 SQLITE_TABLE_APP_SETTINGS = "app_settings"
+SQLITE_TABLE_LIFE_ADL = "life_adl_assessments"
+SQLITE_TABLE_AI_INSIGHT_LOGS = "ai_insight_logs"
 
 APP_SETTING_COLUMNS = [
     "設定キー",
@@ -567,6 +569,18 @@ def initialize_default_app_settings():
         )
 
 
+
+
+
+def get_storage_unification_status():
+    """商品版向け：保存先がSQLite正本に統一されているかの簡易表示用。"""
+    return {
+        "正データ": "SQLite",
+        "Excel保存": "廃止（ダウンロード出力のみ）",
+        "JSON保存": "廃止（app_settingsテーブルへ統合）",
+        "バックアップ": "SQLite DB + 添付ファイル",
+    }
+
 def migrate_excel_to_sqlite_if_needed(table_name: str, excel_path: Path, sheet_name: str, columns: list, date_cols=None, unique_cols=None):
     """初回起動時のみ、既存ExcelデータをSQLiteへ移行する。DBに1件でもあれば上書きしない。"""
     ensure_dirs()
@@ -663,6 +677,14 @@ def ensure_hidamari_db():
     ensure_account_file()
     ensure_login_history_file()
     ensure_user_file()
+    try:
+        ensure_life_adl_file()
+    except Exception:
+        pass
+    try:
+        ensure_ai_insight_log_file()
+    except Exception:
+        pass
     initialize_default_app_settings()
     run_db_integrity_check(auto_repair=True)
 
@@ -853,62 +875,42 @@ def record_backup_history(kind, file_path, result="成功", memo=""):
         pass
 
 
+
 def create_backup_zip(kind="手動"):
-    """DB・Excel・写真フォルダをZIP化して保存する。"""
+    """
+    SQLite正本のDBと添付ファイルをZIP化して保存する。
+    商品版ではExcel/JSON互換ファイルをバックアップ対象にしません。
+    """
     ensure_security_dirs()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     zip_path = BACKUP_DIR / f"hidamari_backup_{kind}_{timestamp}.zip"
 
     try:
-        # SQLiteを可能な範囲で整合状態へ
         if HIDAMARI_DB_FILE.exists():
             with get_hidamari_conn() as conn:
                 conn.execute("PRAGMA wal_checkpoint(FULL);")
 
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            # DB本体
             if HIDAMARI_DB_FILE.exists():
                 zf.write(HIDAMARI_DB_FILE, arcname=f"data/{HIDAMARI_DB_FILE.name}")
 
-            # LIFE用DB（旧仕様の別DBが残っている場合もバックアップ対象に含める）
             for life_db in [DATA_DIR / "hidamari_life.db", Path("hidamari_life.db")]:
                 if life_db.exists():
                     zf.write(life_db, arcname=f"data/{life_db.name}")
 
-            # 互換用Excel・ログイン管理Excel
-            for xlsx in [
-                HEALTH_FILE, EXCRETION_FILE, USER_FILE, HANDOVER_FILE,
-                SHORT_GOAL_MASTER_FILE, SHORT_GOAL_CHECK_FILE, MONITORING_DRAFT_FILE,
-                LIFE_ADL_FILE, ALERT_CONDITION_FILE, ACCOUNT_FILE, LOGIN_HISTORY_FILE
-            ]:
-                if Path(xlsx).exists():
-                    zf.write(xlsx, arcname=f"data/{Path(xlsx).name}")
-
-            # 旧JSON設定が残っている場合も互換バックアップ
-            for json_file in [MENU_CATEGORY_SETTINGS_FILE, globals().get("DASHBOARD_SETTINGS_FILE", DATA_DIR / "dashboard_settings.json")]:
-                try:
-                    if Path(json_file).exists():
-                        zf.write(json_file, arcname=f"data/{Path(json_file).name}")
-                except Exception:
-                    pass
-
-
-            # 写真・Excel添付
             for folder in [BUSINESS_HANDOVER_PHOTO_DIR, BUSINESS_HANDOVER_EXCEL_DIR]:
                 if folder.exists():
                     for file in folder.rglob("*"):
                         if file.is_file():
                             zf.write(file, arcname=str(file))
 
-        record_backup_history(kind, zip_path, "成功", "バックアップ作成")
+        record_backup_history(kind, zip_path, "成功", "SQLite正本バックアップ作成")
         add_audit_log("バックアップ作成", "backup_history", zip_path.name, f"{kind}バックアップを作成")
         return zip_path, ""
     except Exception as e:
         record_backup_history(kind, zip_path, "失敗", str(e))
         add_audit_log("バックアップ失敗", "backup_history", zip_path.name, str(e))
         return None, str(e)
-
-
 def run_daily_auto_backup():
     """1日1回だけ自動バックアップを作成する。"""
     try:
@@ -932,13 +934,13 @@ def run_daily_auto_backup():
         pass
 
 
+
 def restore_from_backup_zip(uploaded_file):
-    """バックアップZIPからDB等を復元する。管理者のみ。"""
+    """SQLite正本バックアップZIPからDB等を復元する。管理者のみ。"""
     if not is_admin_user():
         return False, "管理者のみ復元できます。"
     ensure_security_dirs()
 
-    # 復元前バックアップを必ず作る
     pre_backup, pre_err = create_backup_zip(kind="復元前")
     if pre_err:
         return False, f"復元前バックアップに失敗しました：{pre_err}"
@@ -954,42 +956,24 @@ def restore_from_backup_zip(uploaded_file):
             if f"data/{HIDAMARI_DB_FILE.name}" not in names:
                 return False, "このZIPには hidamari_health.db が含まれていません。"
 
-            # DB復元
-            extracted_db = zf.read(f"data/{HIDAMARI_DB_FILE.name}")
-            HIDAMARI_DB_FILE.write_bytes(extracted_db)
+            HIDAMARI_DB_FILE.write_bytes(zf.read(f"data/{HIDAMARI_DB_FILE.name}"))
 
-            # あればLIFE用DBも復元
             if "data/hidamari_life.db" in names:
                 (DATA_DIR / "hidamari_life.db").write_bytes(zf.read("data/hidamari_life.db"))
 
-            # あれば主要Excelも復元
-            for xlsx in [
-                HEALTH_FILE, EXCRETION_FILE, USER_FILE, HANDOVER_FILE,
-                SHORT_GOAL_MASTER_FILE, SHORT_GOAL_CHECK_FILE, MONITORING_DRAFT_FILE,
-                LIFE_ADL_FILE, ALERT_CONDITION_FILE, ACCOUNT_FILE, LOGIN_HISTORY_FILE
-            ]:
-                arc = f"data/{Path(xlsx).name}"
-                if arc in names:
-                    Path(xlsx).write_bytes(zf.read(arc))
+            for folder in [BUSINESS_HANDOVER_PHOTO_DIR, BUSINESS_HANDOVER_EXCEL_DIR]:
+                for name in names:
+                    if name.startswith(str(folder)) and not name.endswith("/"):
+                        target = Path(name)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(zf.read(name))
 
-            # あれば旧JSON設定も復元（SQLite設定へは次回起動時に移行可能）
-            for json_file in [MENU_CATEGORY_SETTINGS_FILE, globals().get("DASHBOARD_SETTINGS_FILE", DATA_DIR / "dashboard_settings.json")]:
-                try:
-                    arc = f"data/{Path(json_file).name}"
-                    if arc in names:
-                        Path(json_file).write_bytes(zf.read(arc))
-                except Exception:
-                    pass
-
-
-        add_audit_log("データ復元", "restore", restore_zip_path.name, "バックアップZIPから復元")
-        record_backup_history("復元", restore_zip_path, "成功", "バックアップZIPから復元")
+        add_audit_log("データ復元", "restore", restore_zip_path.name, "SQLite正本バックアップZIPから復元")
+        record_backup_history("復元", restore_zip_path, "成功", "SQLite正本バックアップZIPから復元")
         return True, f"復元しました。復元前バックアップも作成済みです：{pre_backup.name if pre_backup else ''}"
     except Exception as e:
         add_audit_log("データ復元失敗", "restore", "", str(e))
         return False, f"復元に失敗しました：{e}"
-
-
 def show_security_maintenance_menu():
     if not is_admin_user():
         st.warning("このメニューは管理者専用です。")
@@ -1468,16 +1452,16 @@ def option_code(option_text):
     return clean_text(option_text).split(":")[0].strip()
 
 
+
 def ensure_excel_file(path, sheet_name, columns):
+    """
+    Ver3.4以降の互換用。
+    商品版ではExcelファイルを正データとして作成しません。
+    既存Excelからの初回移行だけは各ensure_*関数側で行います。
+    """
     ensure_dirs()
-    if not path.exists():
-        pd.DataFrame(columns=columns).to_excel(path, index=False, sheet_name=sheet_name)
+    return
 
-
-
-# =========================
-# ログインアカウント管理・ログイン履歴
-# =========================
 def is_bcrypt_available() -> bool:
     """bcryptライブラリが利用できるか確認する。"""
     return bcrypt is not None
@@ -3166,22 +3150,51 @@ def show_photo_import_menu():
 # =========================
 # LIFE入力標準化・ADL評価データ
 # =========================
+
 def ensure_life_adl_file():
-    ensure_excel_file(LIFE_ADL_FILE, "ADL評価", LIFE_ADL_COLUMNS)
+    """
+    LIFE ADL評価をSQLiteで管理する。
+    旧Excelがある場合のみ初回移行し、以後はSQLiteを正とする。
+    """
+    ensure_dirs()
+    if sqlite_table_row_count(SQLITE_TABLE_LIFE_ADL) > 0:
+        return
+
+    df = pd.DataFrame(columns=LIFE_ADL_COLUMNS)
+    if LIFE_ADL_FILE.exists():
+        try:
+            df = pd.read_excel(LIFE_ADL_FILE, sheet_name="ADL評価")
+        except Exception:
+            try:
+                df = pd.read_excel(LIFE_ADL_FILE)
+            except Exception:
+                df = pd.DataFrame(columns=LIFE_ADL_COLUMNS)
+
+    df = normalize_df_columns(df, LIFE_ADL_COLUMNS)
+    if not df.empty:
+        df["評価日"] = pd.to_datetime(df["評価日"], errors="coerce")
+        df["対象月"] = df["対象月"].astype(str)
+        df["利用者名"] = df["利用者名"].astype(str).str.strip()
+        if "評価ID" in df.columns:
+            df["評価ID"] = df["評価ID"].astype(str)
+            missing = df["評価ID"].astype(str).str.strip() == ""
+            df.loc[missing, "評価ID"] = [str(uuid.uuid4()) for _ in range(int(missing.sum()))]
+        df = df.drop_duplicates(subset=["対象月", "利用者名"], keep="last")
+
+    save_sqlite_table(
+        df,
+        SQLITE_TABLE_LIFE_ADL,
+        LIFE_ADL_COLUMNS,
+        date_cols=["評価日"],
+        unique_cols=["対象月", "利用者名"],
+    )
 
 
 def load_life_adl_data():
+    """LIFE ADL評価をSQLiteから読み込む。"""
     ensure_life_adl_file()
-    try:
-        df = pd.read_excel(LIFE_ADL_FILE, sheet_name="ADL評価")
-    except Exception:
-        df = pd.DataFrame(columns=LIFE_ADL_COLUMNS)
+    df = load_sqlite_table(SQLITE_TABLE_LIFE_ADL, LIFE_ADL_COLUMNS, date_cols=["評価日"])
 
-    for col in LIFE_ADL_COLUMNS:
-        if col not in df.columns:
-            df[col] = ""
-
-    df = df[LIFE_ADL_COLUMNS].copy()
     if not df.empty:
         df["評価日"] = pd.to_datetime(df["評価日"], errors="coerce")
         for col in LIFE_ADL_COLUMNS:
@@ -3191,19 +3204,26 @@ def load_life_adl_data():
 
 
 def save_life_adl_data(df):
+    """LIFE ADL評価をSQLiteへ保存する。Excelには保存しない。"""
     ensure_dirs()
-    df = df.copy()
-    for col in LIFE_ADL_COLUMNS:
-        if col not in df.columns:
-            df[col] = ""
-    df = df[LIFE_ADL_COLUMNS].astype("object")
+    df = normalize_df_columns(df, LIFE_ADL_COLUMNS)
     if not df.empty:
         df["評価日"] = pd.to_datetime(df["評価日"], errors="coerce")
         df["対象月"] = df["対象月"].astype(str)
         df["利用者名"] = df["利用者名"].astype(str).str.strip()
+        if "評価ID" in df.columns:
+            df["評価ID"] = df["評価ID"].astype(str)
+            missing = df["評価ID"].astype(str).str.strip() == ""
+            df.loc[missing, "評価ID"] = [str(uuid.uuid4()) for _ in range(int(missing.sum()))]
         df = df.drop_duplicates(subset=["対象月", "利用者名"], keep="last")
-    df.to_excel(LIFE_ADL_FILE, index=False, sheet_name="ADL評価")
 
+    save_sqlite_table(
+        df,
+        SQLITE_TABLE_LIFE_ADL,
+        LIFE_ADL_COLUMNS,
+        date_cols=["評価日"],
+        unique_cols=["対象月", "利用者名"],
+    )
 
 def upsert_life_adl_record(record):
     df = load_life_adl_data()
@@ -4226,16 +4246,15 @@ def load_alert_condition_master():
     return normalize_alert_condition_master_df(df)
 
 
-def save_alert_condition_master(df):
-    """条件マスタをSQLiteと互換用Excelの両方へ保存する。
 
-    業務全体申し送りの自動抽出はSQLiteを参照しますが、
-    バックアップ・確認用としてExcelにも同じ内容を書き出します。
+def save_alert_condition_master(df):
+    """
+    条件マスタをSQLiteへ保存する。
+    商品版ではExcelファイルを正データとして書き出しません。
     """
     ensure_dirs()
     df = normalize_alert_condition_master_df(df)
 
-    # 条件IDが空の行は自動採番する
     existing_ids = set()
     for i, row in df.iterrows():
         cid = clean_text(row.get("条件ID"))
@@ -4247,15 +4266,7 @@ def save_alert_condition_master(df):
         existing_ids.add(cid)
 
     save_sqlite_table(df, SQLITE_TABLE_ALERT_CONDITIONS, ALERT_CONDITION_COLUMNS, unique_cols=["条件ID"])
-
-    # 互換用Excelにも保存。失敗しても本体のSQLite保存は止めない。
-    try:
-        df.to_excel(ALERT_CONDITION_FILE, index=False, sheet_name="条件マスタ")
-    except Exception:
-        pass
-
     return df
-
 
 def parse_keywords(value):
     text = clean_text(value)
@@ -5142,12 +5153,14 @@ def read_excel_safe(path: Path, columns: list, sheet_name: str | None = None) ->
     return df[columns].astype("object")
 
 
-def save_excel_safe(df: pd.DataFrame, path: Path, columns: list, sheet_name: str):
-    """互換用：ダウンロード等でExcel出力する場合に使う。"""
-    ensure_dirs()
-    df = normalize_df_columns(df, columns)
-    df.to_excel(path, index=False, sheet_name=sheet_name)
 
+def save_excel_safe(df: pd.DataFrame, path: Path, columns: list, sheet_name: str):
+    """
+    互換用。
+    商品版ではExcelファイルを正データとして保存しません。
+    永続保存が必要なデータは各save_*関数でSQLiteへ保存してください。
+    """
+    return normalize_df_columns(df, columns)
 
 def load_short_goal_master():
     ensure_short_goal_files()
@@ -6094,8 +6107,9 @@ def dataframe_to_excel_bytes(sheets: dict):
     return buffer.getvalue()
 
 
+
 def load_selected_export_data(key):
-    """管理者ダウンロード用に、選択されたデータを読み込む。"""
+    """管理者ダウンロード用に、SQLite正データから選択データを読み込む。"""
     if key == "健康チェック":
         return load_health_data()
     if key == "排泄チェック":
@@ -6103,11 +6117,7 @@ def load_selected_export_data(key):
     if key == "利用者マスタ":
         return load_users(include_hidden=True)
     if key == "業務全体申し送り":
-        ensure_business_handover_file()
-        try:
-            return pd.read_excel(HANDOVER_FILE, sheet_name="業務全体申し送り")
-        except Exception:
-            return pd.DataFrame(columns=BUSINESS_HANDOVER_COLUMNS)
+        return load_business_handover_data()
     if key == "短期目標マスタ":
         return load_short_goal_master()
     if key == "短期目標実施チェック":
@@ -6115,15 +6125,12 @@ def load_selected_export_data(key):
     if key == "モニタリング下書き":
         return load_monitoring_drafts()
     if key == "LIFE ADL評価":
-        ensure_excel_file(LIFE_ADL_FILE, "LIFE_ADL", LIFE_ADL_COLUMNS)
-        try:
-            return pd.read_excel(LIFE_ADL_FILE, sheet_name="LIFE_ADL")
-        except Exception:
-            return pd.DataFrame(columns=LIFE_ADL_COLUMNS)
+        return load_life_adl_data()
     if key == "ログイン履歴":
         return load_login_history()
+    if key == "AI分析ログ":
+        return load_ai_insight_logs()
     return pd.DataFrame()
-
 
 def filter_export_dataframe(df, start_date=None, end_date=None, user_name="全員"):
     """記録日・日付・評価日・作成日などの日付列と利用者名で絞り込む。"""
@@ -6755,18 +6762,39 @@ AI_INSIGHT_LOG_FILE = DATA_DIR / "ai_insight_log.xlsx"
 AI_INSIGHT_LOG_COLUMNS = ["作成日時", "分析基準日", "利用者名", "対象期間", "ルール分析", "AI分析結果"]
 
 
+
 def ensure_ai_insight_log_file():
-    ensure_excel_file(AI_INSIGHT_LOG_FILE, "AI分析ログ", AI_INSIGHT_LOG_COLUMNS)
+    """
+    AI分析ログをSQLiteで管理する。
+    旧Excelがある場合のみ初回移行し、以後はSQLiteを正とする。
+    """
+    ensure_dirs()
+    if sqlite_table_row_count(SQLITE_TABLE_AI_INSIGHT_LOGS) > 0:
+        return
+
+    df = pd.DataFrame(columns=AI_INSIGHT_LOG_COLUMNS)
+    if AI_INSIGHT_LOG_FILE.exists():
+        try:
+            df = pd.read_excel(AI_INSIGHT_LOG_FILE, sheet_name="AI分析ログ")
+        except Exception:
+            try:
+                df = pd.read_excel(AI_INSIGHT_LOG_FILE)
+            except Exception:
+                df = pd.DataFrame(columns=AI_INSIGHT_LOG_COLUMNS)
+
+    df = normalize_df_columns(df, AI_INSIGHT_LOG_COLUMNS)
+    save_sqlite_table(df, SQLITE_TABLE_AI_INSIGHT_LOGS, AI_INSIGHT_LOG_COLUMNS, sort_cols=["作成日時"])
 
 
 def load_ai_insight_logs():
     ensure_ai_insight_log_file()
-    return read_excel_safe(AI_INSIGHT_LOG_FILE, AI_INSIGHT_LOG_COLUMNS, "AI分析ログ")
+    return load_sqlite_table(SQLITE_TABLE_AI_INSIGHT_LOGS, AI_INSIGHT_LOG_COLUMNS).astype("object")
 
 
 def save_ai_insight_logs(df):
-    save_excel_safe(df, AI_INSIGHT_LOG_FILE, AI_INSIGHT_LOG_COLUMNS, "AI分析ログ")
-
+    ensure_dirs()
+    df = normalize_df_columns(df, AI_INSIGHT_LOG_COLUMNS)
+    save_sqlite_table(df, SQLITE_TABLE_AI_INSIGHT_LOGS, AI_INSIGHT_LOG_COLUMNS, sort_cols=["作成日時"])
 
 def filter_records_by_period(df, date_col, start_day, end_day, user_name=None):
     if df is None or df.empty or date_col not in df.columns:
