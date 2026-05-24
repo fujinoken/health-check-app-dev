@@ -4437,6 +4437,7 @@ def render_business_handover_card(row):
 
 def show_business_handover_menu():
     st.header("業務全体申し送り")
+    show_observation_perspective("handover")
     st.caption("利用者個別ではなく、施設全体の出来事・注意点・次の勤務者に共有したい内容を記録します。")
 
     tab_input, tab_manage, tab_condition = st.tabs(["新規登録", "検索・更新・削除", "異常検知条件設定"])
@@ -4468,16 +4469,31 @@ def show_business_handover_menu():
             with c3:
                 staff_name = st.text_input("記入者", placeholder="例：藤野", key="business_handover_staff")
 
-            overall_note = st.text_area(
-                "全体申し送り",
-                height=150,
-                placeholder="例：共有スペースの床が滑りやすいため注意。来客予定あり。備品の補充が必要です。",
-                key="business_handover_overall_note",
+            st.markdown("#### 事実／気づき／次に見ること")
+            st.caption("責めるためではなく、次の勤務者が動きやすくなる形で分けて残します。")
+            fact_note = st.text_area(
+                "事実（見たこと・起きたこと）",
+                height=100,
+                placeholder="例：共有スペースの床が濡れていた。15時頃に来客あり。物品残数が少ない。",
+                key="business_handover_fact_note",
             )
+            insight_note = st.text_area(
+                "気づき（普段との違い・気になったこと）",
+                height=90,
+                placeholder="例：いつもより表情が硬い、動線が混みやすい、確認が必要そう。",
+                key="business_handover_insight_note",
+            )
+            next_note = st.text_area(
+                "次に見ること（次勤務者への確認ポイント）",
+                height=90,
+                placeholder="例：床の状態を再確認、物品補充、家族連絡の有無を確認。",
+                key="business_handover_next_note",
+            )
+            overall_note = format_handover_structured_note(fact_note, insight_note, next_note)
 
             check_note = st.text_area(
-                "要確認事項",
-                height=120,
+                "要確認事項（未対応・確認中のこと）",
+                height=100,
                 placeholder="例：明日の往診時間確認、家族連絡の確認、物品残数確認など",
                 key="business_handover_check_note",
             )
@@ -6752,6 +6768,7 @@ def show_structured_insight_menu():
         st.stop()
 
     st.header("現場の気づき構造化・AI管理者支援")
+    show_observation_perspective("ai")
     st.caption("健康チェック・排泄・申し送り・短期目標を合わせて、管理者が確認しやすい形に整理します。AIは診断せず、記録上の気づきと確認ポイントだけを出します。")
 
     users = get_active_user_names()
@@ -6895,8 +6912,8 @@ def logout_button():
 # =========================
 # Ver3.0 UI共通設定・共通部品
 # =========================
-APP_VERSION = "Ver3.0 UI調整版"
-APP_COPY = "小規模介護施設向け 健康・申し送り・LIFE支援OS"
+APP_VERSION = "Ver3.1 現場OSマインド実装版"
+APP_COPY = "観察して、共有して、次につなぐ 現場OS"
 
 UI_COLORS = {
     "staff": {"bg": "#FFFDF7", "surface": "#FFFFFF", "surface_soft": "#FFF7EC", "accent": "#C9705C", "accent_dark": "#8F4C3E", "sub": "#6A5B52", "border": "#E8D7C5"},
@@ -7162,6 +7179,11 @@ def apply_design():
         .staff-welcome {{ background:linear-gradient(135deg, #F7EFE8 0%, #FAF7F1 100%); border:1px solid #E6C9B7; border-radius:18px; padding:14px 16px; margin:10px 0 16px 0; color:#6A5142; }}
         .admin-welcome {{ background:linear-gradient(135deg, #EAF1F5 0%, #F7FAFA 100%); border:1px solid #BFD0D8; border-radius:18px; padding:14px 16px; margin:10px 0 16px 0; color:#405766; }}
         .mini-badge {{ display:inline-block; background:#ffffffcc; border:1px solid rgba(0,0,0,.08); border-radius:999px; padding:5px 10px; margin:3px 4px 3px 0; font-size:.86rem; }}
+
+        .mindset-box { background:#FFFDF7; border:1px solid var(--hidamari-border); border-left:6px solid var(--hidamari-accent); border-radius:16px; padding:13px 15px; margin:10px 0 14px 0; color:var(--hidamari-sub); line-height:1.65; }
+        .mindset-title { color:var(--hidamari-accent-dark); font-weight:850; margin-bottom:4px; }
+        .check-card { background:#FFFFFF; border:1px solid var(--hidamari-border); border-radius:14px; padding:12px 14px; margin:7px 0; }
+        .stop-card { background:#FFF7EC; border:1px solid #E6C9B7; border-radius:14px; padding:12px 14px; margin:7px 0; }
         @media (max-width: 900px) {{
             .block-container {{ padding-left:.8rem; padding-right:.8rem; }}
             h1 {{ font-size:1.55rem; }} h2 {{ font-size:1.35rem; }} h3 {{ font-size:1.12rem; }}
@@ -7196,6 +7218,102 @@ def ui_badges(items):
     if html:
         st.markdown(html, unsafe_allow_html=True)
 
+
+
+
+def os_mindset_box(title, body, icon="📝"):
+    """Ver3.1 現場OSマインド共通表示。責めず、観察し、共有し、次につなぐ。"""
+    st.markdown(
+        f'<div class="mindset-box"><div class="mindset-title">{icon} {title}</div><div>{body}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def show_observation_perspective(kind="health"):
+    """入力画面に短い観察の視点を表示する。"""
+    messages = {
+        "health": "数値だけで判断せず、普段との違いを一つだけ残します。診断ではなく、次の職員が見やすくなる記録です。",
+        "excretion": "出た・出ないだけで終わらせず、水分・食事・表情・腹部の様子へつなげます。責める記録ではなく、見逃さない記録です。",
+        "handover": "申し送りは『誰が悪いか』ではなく、『何が起きたか／何に気づいたか／次に何を見るか』を渡すものです。",
+        "admin": "管理者画面では、職員のミス探しではなく、記録・共有・対応のどこで止まっているかを見ます。",
+        "ai": "AIは判断者ではありません。記録を整理し、確認ポイントを見やすくする補助係として使います。",
+    }
+    os_mindset_box("観察の視点", messages.get(kind, messages["health"]), "👀")
+
+
+def build_confirm_points_from_attention(row):
+    """注意利用者の表示を責める言葉ではなく確認ポイントへ変換する。"""
+    points = []
+    item = clean_text(row.get("注意項目"))
+    change = clean_text(row.get("気になる変化"))
+    family = clean_text(row.get("家族共有メモ"))
+    if "体温" in item or "発熱" in item:
+        points.append("体温を再確認し、水分・食事・普段との違いを見る")
+    if "SpO2" in item:
+        points.append("SpO2を再測定し、呼吸・顔色・傾眠の有無を見る")
+    if "食事" in item or "摂取" in item:
+        points.append("食事量だけでなく、口腔・むせ・好み・疲れを確認する")
+    if "排便" in item or "便" in item:
+        points.append("排便間隔、水分、腹部症状、下剤等の情報を確認する")
+    if change:
+        points.append("気になる変化を次勤務者へそのまま共有する")
+    if family:
+        points.append("家族へ共有してよい内容か、表現を確認する")
+    if not points:
+        points.append("普段との違いを確認し、必要な共有だけを残す")
+    return " / ".join(dict.fromkeys(points))
+
+
+def add_confirm_points_column(df):
+    """注意利用者一覧に確認ポイント列を追加する。"""
+    if df is None or df.empty:
+        return df
+    work = df.copy()
+    work["確認すること"] = work.apply(build_confirm_points_from_attention, axis=1)
+    preferred = [c for c in ["利用者名", "注意項目", "確認すること", "気になる変化", "家族共有メモ", "記録日"] if c in work.columns]
+    rest = [c for c in work.columns if c not in preferred]
+    return work[preferred + rest]
+
+
+def build_process_stop_summary(health_df, ex_df, handover_df, target_date):
+    """管理者向けに『どこで止まっているか』を整理する。"""
+    rows = []
+    try:
+        h = health_df.copy()
+        if not h.empty:
+            h["記録日"] = pd.to_datetime(h["記録日"], errors="coerce")
+            h_day = h[h["記録日"].dt.date == target_date]
+        else:
+            h_day = pd.DataFrame()
+        missing_health = max(len(active_users) - len(set(h_day.get("利用者名", []))), 0)
+        rows.append({"確認場所": "健康チェック", "止まりやすい点": "未入力・気になる変化の未共有", "件数": missing_health, "次に見ること": "未入力者を責めず、入力できなかった理由と入力導線を見る"})
+    except Exception:
+        pass
+    try:
+        ex_day = get_day_excretion_data(ex_df, target_date, None)
+        rows.append({"確認場所": "排泄チェック", "止まりやすい点": "時間帯別記録の不足", "件数": 0 if ex_day is None else len(ex_day), "次に見ること": "記録数ではなく、排便なし・濃縮尿など共有すべき点を見る"})
+    except Exception:
+        pass
+    try:
+        pending = 0
+        if handover_df is not None and not handover_df.empty and "対応状況" in handover_df.columns:
+            pending = int(handover_df[handover_df["対応状況"].astype(str).isin(["未対応", "対応中"])].shape[0])
+        rows.append({"確認場所": "申し送り", "止まりやすい点": "未対応・対応中のまま残る", "件数": pending, "次に見ること": "誰の責任かではなく、次の一手が書かれているか確認する"})
+    except Exception:
+        pass
+    return pd.DataFrame(rows, columns=["確認場所", "止まりやすい点", "件数", "次に見ること"])
+
+
+def format_handover_structured_note(fact_text, insight_text, next_text):
+    """事実／気づき／次に見ることを既存の申し送り欄へ保存しやすく整形する。"""
+    parts = []
+    if clean_text(fact_text):
+        parts.append("【事実】\n" + clean_text(fact_text))
+    if clean_text(insight_text):
+        parts.append("【気づき】\n" + clean_text(insight_text))
+    if clean_text(next_text):
+        parts.append("【次に見ること】\n" + clean_text(next_text))
+    return "\n\n".join(parts)
 
 def flatten_menu_groups(groups):
     menus = []
@@ -7625,7 +7743,7 @@ def show_my_dashboard_blocks(target_date=None):
             if attention_df.empty:
                 st.success("注意表示の対象者はいません。")
             else:
-                st.dataframe(attention_df, use_container_width=True, hide_index=True)
+                st.dataframe(add_confirm_points_column(attention_df), use_container_width=True, hide_index=True)
         except Exception as e:
             st.warning(f"注意利用者を表示できませんでした: {e}")
 
@@ -7688,6 +7806,7 @@ if menu == "管理者ダッシュボード":
         st.stop()
 
     st.header("管理者ダッシュボード")
+    show_observation_perspective("admin")
 
     health_df = load_health_data()
     ex_df = load_excretion_data()
@@ -7739,7 +7858,14 @@ if menu == "管理者ダッシュボード":
         st.success("確認日の注意利用者はありません。")
     else:
         st.warning("確認したい利用者がいます。")
-        st.dataframe(attention_df, use_container_width=True, hide_index=True)
+        st.dataframe(add_confirm_points_column(attention_df), use_container_width=True, hide_index=True)
+
+    st.subheader("どこで止まっているか")
+    st.caption("職員個人ではなく、記録・共有・対応の流れを確認します。")
+    try:
+        st.dataframe(build_process_stop_summary(health_df, ex_df, load_business_handover_data(), target_date), use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.info(f"流れの確認表を作成できませんでした: {e}")
 
     st.subheader("直近3日間、排便記録がない利用者")
     st.caption("確認する日付を含めた直近3日間で、排便記録がない利用者を表示します。")
@@ -7851,6 +7977,7 @@ elif menu == "写真から半自動入力":
 # =========================
 elif menu == "健康チェック入力":
     st.header("健康チェック入力")
+    show_observation_perspective("health")
 
     if st.session_state.role == "staff":
         st.write("バイタルと食事の様子を、今日の記録として残します。")
@@ -8017,6 +8144,7 @@ elif menu == "健康チェック入力":
 # =========================
 elif menu == "排泄チェック入力":
     st.header("排泄チェック入力")
+    show_observation_perspective("excretion")
     st.caption("排泄記録は健康チェックとは別データとして保存します。キーは「記録日＋利用者名＋時間帯」です。")
 
     if st.session_state.role == "staff":
