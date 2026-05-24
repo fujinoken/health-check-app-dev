@@ -44,7 +44,7 @@ except Exception:
 # =========================
 st.set_page_config(
     page_title="ひだまり 健康チェック管理システム",
-    page_icon="",
+    page_icon="☀️",
     layout="wide",
 )
 
@@ -6891,154 +6891,169 @@ def logout_button():
             st.rerun()
 
 
-def apply_design():
-    role_now = st.session_state.get("role", None)
-    if role_now == "staff":
-        bg = "#FFFDF7"
-        accent = "#D97A6A"
-        box = "#FFF1E8"
-    else:
-        bg = "#F4F6F9"
-        accent = "#1F4E79"
-        box = "#EAF1F8"
+# =========================
+# Ver3.0 UI共通設定・共通部品
+# =========================
+APP_VERSION = "Ver3.0 UI調整版"
+APP_COPY = "小規模介護施設向け 健康・申し送り・LIFE支援OS"
 
+UI_COLORS = {
+    "staff": {"bg": "#FFFDF7", "surface": "#FFFFFF", "surface_soft": "#FFF7EC", "accent": "#C9705C", "accent_dark": "#8F4C3E", "sub": "#6A5B52", "border": "#E8D7C5"},
+    "admin": {"bg": "#F6F8F7", "surface": "#FFFFFF", "surface_soft": "#EEF4F1", "accent": "#2F6F5E", "accent_dark": "#244D43", "sub": "#52605B", "border": "#C9DAD2"},
+}
+
+MENU_GROUPS_ADMIN = {
+    "朝の確認": ["自分専用ダッシュボード", "管理者ダッシュボード", "業務全体申し送り", "管理者支援"],
+    "日々の入力": ["健康チェック入力", "写真から半自動入力", "排泄チェック入力", "日々の実施チェック"],
+    "記録確認": ["過去データ管理", "排泄詳細管理", "実施履歴一覧", "短期目標データ管理"],
+    "短期目標・LIFE": ["短期目標・モニタリング", "短期目標マスタ", "モニタリング下書き作成", "LIFE入力標準化", "管理者LIFE入力", "LIFE不足チェック", "LIFE CSV出力", "LIFE登録一覧", "加算シミュレーション"],
+    "帳票・共有": ["家族向けレポート作成", "ひだまりレポートPDF", "データダウンロード"],
+    "設定・保守": ["利用者マスタ管理", "ログイン・職員ID管理", "セキュリティ・保守管理", "自分専用ダッシュボード設定", "現場の気づき構造化・AI管理者支援"],
+}
+
+MENU_GROUPS_STAFF = {"今日の入力": ["業務全体申し送り", "健康チェック入力", "排泄チェック入力", "日々の実施チェック"]}
+
+
+def get_ui_theme():
+    role_now = st.session_state.get("role", "staff")
+    return UI_COLORS["admin"] if role_now == "admin" else UI_COLORS["staff"]
+
+
+def apply_design():
+    """Ver3.0共通デザイン。色・余白・ボタン・iPad表示をここで一元管理する。"""
+    theme = get_ui_theme()
     st.markdown(
         f"""
         <style>
-        .stApp {{
-            background-color: {bg};
+        :root {{
+            --hidamari-bg: {theme['bg']};
+            --hidamari-surface: {theme['surface']};
+            --hidamari-soft: {theme['surface_soft']};
+            --hidamari-accent: {theme['accent']};
+            --hidamari-accent-dark: {theme['accent_dark']};
+            --hidamari-sub: {theme['sub']};
+            --hidamari-border: {theme['border']};
         }}
-        h1, h2, h3 {{
-            color: {accent};
+        .stApp {{ background: var(--hidamari-bg); }}
+        h1, h2, h3 {{ color: var(--hidamari-accent-dark); letter-spacing: .01em; }}
+        h1 {{ font-size: 2rem; }} h2 {{ font-size: 1.55rem; }} h3 {{ font-size: 1.22rem; }}
+        [data-testid="stSidebar"] {{
+            background: linear-gradient(180deg, var(--hidamari-soft) 0%, #FFFFFF 100%);
+            border-right: 1px solid var(--hidamari-border);
         }}
-        .info-box {{
-            background: {box};
-            padding: 14px 18px;
-            border-radius: 14px;
-            border: 1px solid rgba(0,0,0,0.08);
-            margin-bottom: 12px;
+        [data-testid="stSidebar"] * {{ font-size: 0.98rem; }}
+        .block-container {{ padding-top: 1.2rem; padding-bottom: 3rem; max-width: 1280px; }}
+        div[data-testid="stButton"] button,
+        div[data-testid="stDownloadButton"] button,
+        button[kind="primary"], button[kind="secondary"] {{
+            min-height: 48px; border-radius: 14px !important; font-weight: 700 !important;
+            border: 1px solid var(--hidamari-border) !important;
         }}
-        div[data-testid="stButton"] button {{
-            min-height: 44px;
-            border-radius: 12px;
-            font-weight: 600;
+        div[data-testid="stButton"] button:hover,
+        div[data-testid="stDownloadButton"] button:hover {{
+            border-color: var(--hidamari-accent) !important; color: var(--hidamari-accent-dark) !important;
         }}
-        div[data-baseweb="select"] > div {{
-            min-height: 44px;
-            border-radius: 10px;
+        div[data-baseweb="select"] > div, input, textarea {{ min-height: 46px; border-radius: 12px !important; }}
+        .stTabs [data-baseweb="tab-list"] {{ gap: 8px; flex-wrap: wrap; }}
+        .stTabs [data-baseweb="tab"] {{
+            background: #ffffff; border: 1px solid var(--hidamari-border); border-radius: 999px; padding: 8px 14px;
         }}
-        input, textarea {{
-            border-radius: 10px !important;
+        .stTabs [aria-selected="true"] {{ background: var(--hidamari-soft) !important; color: var(--hidamari-accent-dark) !important; font-weight: 800; }}
+        .info-box, .ui-card {{
+            background: var(--hidamari-surface); padding: 16px 18px; border-radius: 18px;
+            border: 1px solid var(--hidamari-border); margin: 10px 0 14px 0;
+            box-shadow: 0 6px 18px rgba(45, 64, 55, 0.05);
         }}
+        .ui-card-soft {{ background: var(--hidamari-soft); padding: 14px 16px; border-radius: 16px; border: 1px solid var(--hidamari-border); margin: 8px 0 12px 0; }}
+        .ui-section-title {{ display:flex; align-items:center; gap:10px; margin:14px 0 8px 0; color:var(--hidamari-accent-dark); font-size:1.25rem; font-weight:850; }}
+        .ui-section-caption {{ color: var(--hidamari-sub); margin-bottom: 12px; line-height: 1.65; }}
+        .ui-badge {{ display:inline-block; background:#ffffffcc; border:1px solid var(--hidamari-border); color:var(--hidamari-accent-dark); border-radius:999px; padding:5px 11px; margin:3px 5px 3px 0; font-size:.86rem; font-weight:700; }}
+        .sidebar-title {{ font-weight:900; color:var(--hidamari-accent-dark); font-size:1.08rem; margin-bottom:2px; }}
+        .sidebar-sub {{ color:var(--hidamari-sub); font-size:.82rem; line-height:1.45; margin-bottom:8px; }}
         .hidamari-hero {{
             background: linear-gradient(135deg, #F7F2EA 0%, #EEF5EF 58%, #EAF1F5 100%);
-            border: 1px solid rgba(88, 112, 96, 0.16);
-            border-radius: 28px;
-            padding: 28px 26px;
-            margin: 8px auto 22px auto;
-            max-width: 880px;
-            text-align: center;
-            box-shadow: 0 10px 28px rgba(55, 64, 58, 0.08);
-            position: relative;
-            overflow: hidden;
+            border: 1px solid rgba(88, 112, 96, 0.16); border-radius: 28px; padding: 28px 26px;
+            margin: 8px auto 22px auto; max-width: 880px; text-align: center; box-shadow: 0 10px 28px rgba(55, 64, 58, 0.08); position: relative; overflow: hidden;
         }}
-        .hidamari-hero-title {{
-            font-size: 2.25rem;
-            line-height: 1.25;
-            font-weight: 800;
-            color: #2F6F5E;
-            margin-bottom: 8px;
-            letter-spacing: 0.02em;
-        }}
-        .hidamari-hero-sub {{
-            color: #64706A;
-            font-size: 1.05rem;
-            margin-bottom: 14px;
-        }}
-        .hidamari-illust-row {{
-            display: flex;
-            gap: 14px;
-            flex-wrap: wrap;
-            margin-top: 12px;
-        }}
-        .hidamari-illust-card {{
-            flex: 1 1 210px;
-            background: rgba(255,255,255,0.78);
-            border: 1px solid rgba(0,0,0,0.06);
-            border-radius: 22px;
-            padding: 14px 16px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            min-height: 92px;
-        }}
-        .hidamari-emoji {{
-            width: 58px;
-            height: 58px;
-            border-radius: 50%;
-            background: #fff3d6;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 34px;
-            flex: 0 0 auto;
-        }}
-        .hidamari-card-title {{
-            font-weight: 800;
-            color: #3d463d;
-            margin-bottom: 4px;
-        }}
-        .hidamari-card-text {{
-            color: #666;
-            font-size: 0.9rem;
-            line-height: 1.45;
-        }}
-        .staff-welcome {{
-            background: linear-gradient(135deg, #F7EFE8 0%, #FAF7F1 100%);
-            border: 1px solid #E6C9B7;
-            border-radius: 18px;
-            padding: 14px 16px;
-            margin: 10px 0 16px 0;
-            color: #6A5142;
-        }}
-        .admin-welcome {{
-            background: linear-gradient(135deg, #EAF1F5 0%, #F7FAFA 100%);
-            border: 1px solid #BFD0D8;
-            border-radius: 18px;
-            padding: 14px 16px;
-            margin: 10px 0 16px 0;
-            color: #405766;
-        }}
-        .mini-badge {{
-            display: inline-block;
-            background: #ffffffcc;
-            border: 1px solid rgba(0,0,0,0.08);
-            border-radius: 999px;
-            padding: 5px 10px;
-            margin: 3px 4px 3px 0;
-            font-size: 0.86rem;
-        }}
-        @media (max-width: 768px) {{
-            .hidamari-hero {{
-                padding: 20px 16px;
-                border-radius: 20px;
-            }}
-            .hidamari-hero-title {{
-                font-size: 1.55rem;
-            }}
-            .hidamari-illust-card {{
-                flex: 1 1 100%;
-            }}
-            .hidamari-emoji {{
-                width: 48px;
-                height: 48px;
-                font-size: 28px;
-            }}
+        .hidamari-hero-title {{ font-size: 2.25rem; line-height: 1.25; font-weight: 800; color: #2F6F5E; margin-bottom: 8px; letter-spacing: 0.02em; }}
+        .hidamari-hero-sub {{ color: #64706A; font-size: 1.05rem; margin-bottom: 14px; }}
+        .hidamari-illust-row {{ display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; }}
+        .hidamari-illust-card {{ flex: 1 1 210px; background: rgba(255,255,255,0.78); border: 1px solid rgba(0,0,0,0.06); border-radius: 22px; padding: 14px 16px; display: flex; align-items: center; gap: 12px; min-height: 92px; }}
+        .hidamari-emoji {{ width:58px; height:58px; border-radius:50%; background:#fff3d6; display:flex; align-items:center; justify-content:center; font-size:34px; flex:0 0 auto; }}
+        .hidamari-card-title {{ font-weight:800; color:#3d463d; margin-bottom:4px; }}
+        .hidamari-card-text {{ color:#666; font-size:.9rem; line-height:1.45; }}
+        .staff-welcome {{ background:linear-gradient(135deg, #F7EFE8 0%, #FAF7F1 100%); border:1px solid #E6C9B7; border-radius:18px; padding:14px 16px; margin:10px 0 16px 0; color:#6A5142; }}
+        .admin-welcome {{ background:linear-gradient(135deg, #EAF1F5 0%, #F7FAFA 100%); border:1px solid #BFD0D8; border-radius:18px; padding:14px 16px; margin:10px 0 16px 0; color:#405766; }}
+        .mini-badge {{ display:inline-block; background:#ffffffcc; border:1px solid rgba(0,0,0,.08); border-radius:999px; padding:5px 10px; margin:3px 4px 3px 0; font-size:.86rem; }}
+        @media (max-width: 900px) {{
+            .block-container {{ padding-left:.8rem; padding-right:.8rem; }}
+            h1 {{ font-size:1.55rem; }} h2 {{ font-size:1.35rem; }} h3 {{ font-size:1.12rem; }}
+            div[data-testid="stButton"] button, div[data-testid="stDownloadButton"] button {{ min-height:52px; font-size:1rem; }}
+            .hidamari-hero {{ padding:20px 16px; border-radius:20px; }}
+            .hidamari-hero-title {{ font-size:1.55rem; }}
+            .hidamari-illust-card {{ flex:1 1 100%; }}
+            .hidamari-emoji {{ width:48px; height:48px; font-size:28px; }}
         }}
         </style>
         """,
         unsafe_allow_html=True,
     )
+
+
+def ui_section(title, caption="", icon="☀️"):
+    """画面見出しの共通部品。今後のUI改修はここを使う。"""
+    caption_html = f'<div class="ui-section-caption">{caption}</div>' if caption else ''
+    st.markdown(f'<div class="ui-section-title"><span>{icon}</span><span>{title}</span></div>{caption_html}', unsafe_allow_html=True)
+
+
+def ui_card(title, body="", icon="", soft=False):
+    """カード表示の共通部品。"""
+    cls = "ui-card-soft" if soft else "ui-card"
+    title_html = f"<strong>{icon + ' ' if icon else ''}{title}</strong>" if title else ""
+    st.markdown(f'<div class="{cls}">{title_html}<div style="margin-top:4px; line-height:1.65; color:var(--hidamari-sub);">{body}</div></div>', unsafe_allow_html=True)
+
+
+def ui_badges(items):
+    """小さな状態表示バッジ。"""
+    html = "".join([f'<span class="ui-badge">{clean_text(x)}</span>' for x in items if clean_text(x)])
+    if html:
+        st.markdown(html, unsafe_allow_html=True)
+
+
+def flatten_menu_groups(groups):
+    menus = []
+    for values in groups.values():
+        for item in values:
+            if item not in menus:
+                menus.append(item)
+    return menus
+
+
+def render_sidebar_menu(role):
+    """Ver3.0メニュー。カテゴリ選択＋メニュー選択でiPadでも迷いにくくする。"""
+    groups = MENU_GROUPS_ADMIN if role == "admin" else MENU_GROUPS_STAFF
+    filtered_flat = filter_admin_menus(flatten_menu_groups(groups))
+    with st.sidebar:
+        st.markdown(f'<div class="sidebar-title">ひだまり</div><div class="sidebar-sub">{APP_VERSION}<br>{APP_COPY}</div>', unsafe_allow_html=True)
+        st.caption(f"ログイン：{st.session_state.get('user_label', '')}")
+        st.divider()
+        if role != "admin":
+            return st.radio("今日のメニュー", filtered_flat, key="main_menu_staff")
+        category_names = list(groups.keys())
+        default_category = st.session_state.get("main_menu_category", category_names[0])
+        if default_category not in category_names:
+            default_category = category_names[0]
+        category = st.selectbox("カテゴリ", category_names, index=category_names.index(default_category), key="main_menu_category")
+        menu_options = [m for m in groups.get(category, []) if m in filtered_flat]
+        if not menu_options:
+            menu_options = filtered_flat
+        previous_menu = st.session_state.get("main_menu_selected", menu_options[0])
+        menu_index = menu_options.index(previous_menu) if previous_menu in menu_options else 0
+        selected = st.radio("メニュー", menu_options, index=menu_index, key=f"main_menu_selected_{category}")
+        st.session_state["main_menu_selected"] = selected
+        st.divider()
+        ui_badges(["Ver3.0", "iPad対応", "UI共通化"])
+        return selected
 
 
 apply_design()
@@ -7062,58 +7077,13 @@ else:
 
 
 # =========================
-# メニュー
+# メニュー（Ver3.0：カテゴリ化・iPad最適化）
 # =========================
 users_df = load_users(include_hidden=False)
 active_users = users_df["利用者名"].tolist()
 all_users = active_users
 
-if st.session_state.role == "admin":
-    menu = st.sidebar.radio(
-        "メニュー",
-        filter_admin_menus([
-                        "自分専用ダッシュボード",
-"管理者ダッシュボード",
-            "業務全体申し送り",
-            "現場の気づき構造化・AI管理者支援",
-            "健康チェック入力",
-            "写真から半自動入力",
-            "排泄チェック入力",
-            "短期目標・モニタリング",
-            "短期目標マスタ",
-            "日々の実施チェック",
-            "実施履歴一覧",
-            "モニタリング下書き作成",
-            "短期目標データ管理",
-            "過去データ管理",
-            "排泄詳細管理",
-            "家族向けレポート作成",
-            "ひだまりレポートPDF",
-            "管理者支援",
-            "データダウンロード",
-            "利用者マスタ管理",
-            "ログイン・職員ID管理",
-                    "セキュリティ・保守管理",
-            "自分専用ダッシュボード設定",
-            "LIFE入力標準化",
-            "加算シミュレーション",
-            "管理者LIFE入力",
-            "LIFE不足チェック",
-            "LIFE CSV出力",
-            "LIFE登録一覧",
-        ]),
-    )
-else:
-    menu = st.sidebar.radio(
-        "メニュー",
-        filter_admin_menus([
-            "業務全体申し送り",
-            "健康チェック入力",
-            "排泄チェック入力",
-            "日々の実施チェック",
-        ]),
-    )
-
+menu = render_sidebar_menu(st.session_state.role)
 
 
 # =========================
