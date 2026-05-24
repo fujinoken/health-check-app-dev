@@ -1022,6 +1022,8 @@ ACCOUNT_COLUMNS = [
     "備考",
     "作成日時",
     "更新日時",
+    "初回パスワード変更必須",
+    "最終パスワード変更日時",
 ]
 
 LOGIN_HISTORY_COLUMNS = [
@@ -1324,6 +1326,8 @@ def default_account_rows():
             "備考": "初期管理者。削除・無効化するとログインできなくなるため注意してください。",
             "作成日時": now_text,
             "更新日時": now_text,
+            "初回パスワード変更必須": "はい",
+            "最終パスワード変更日時": "",
         },
         {
             "ログインID": "staff",
@@ -1334,6 +1338,8 @@ def default_account_rows():
             "備考": "初期職員アカウント",
             "作成日時": now_text,
             "更新日時": now_text,
+            "初回パスワード変更必須": "はい",
+            "最終パスワード変更日時": "",
         },
     ]
 
@@ -1352,6 +1358,30 @@ def normalize_accounts_df(df):
     work["権限"] = work["権限"].fillna("staff").astype(str).str.strip()
     work["状態"] = work["状態"].fillna("有効").astype(str).str.strip()
     work = work[work["ログインID"] != ""].drop_duplicates(subset=["ログインID"], keep="last")
+
+    # Ver3.9：初回パスワード変更必須化。
+    # 既存DBに列がない場合はここで安全に補完する。
+    # 初期ID（kanri/staff）で、まだ既定パスワード rui のままなら必ず変更対象にする。
+    if "初回パスワード変更必須" in work.columns:
+        work["初回パスワード変更必須"] = work["初回パスワード変更必須"].map(lambda x: clean_text(x))
+        for idx, row in work.iterrows():
+            current_value = clean_text(row.get("初回パスワード変更必須"))
+            login_id = clean_text(row.get("ログインID")).lower()
+            password_hash = clean_text(row.get("パスワードハッシュ"))
+            if current_value == "":
+                try:
+                    default_pw = verify_password("rui", password_hash)
+                except Exception:
+                    default_pw = False
+                work.at[idx, "初回パスワード変更必須"] = "はい" if (login_id in ["kanri", "staff"] and default_pw) else "いいえ"
+            elif current_value.lower() in ["true", "1", "yes", "有", "必須", "on"]:
+                work.at[idx, "初回パスワード変更必須"] = "はい"
+            else:
+                work.at[idx, "初回パスワード変更必須"] = "いいえ"
+
+    if "最終パスワード変更日時" in work.columns:
+        work["最終パスワード変更日時"] = work["最終パスワード変更日時"].map(lambda x: clean_text(x))
+
     return work.reset_index(drop=True)
 
 
@@ -1456,6 +1486,61 @@ def add_login_history(login_id, label, role, result, memo=""):
     save_login_history(df)
 
 
+def account_requires_password_change(account_row) -> bool:
+    """アカウントが初回パスワード変更必須か判定する。"""
+    if not isinstance(account_row, dict):
+        try:
+            account_row = account_row.to_dict()
+        except Exception:
+            return False
+    value = clean_text(account_row.get("初回パスワード変更必須"))
+    return value in ["はい", "必須", "1", "true", "True", "TRUE"]
+
+
+def validate_new_password(login_id, new_password, confirm_password, current_hash=""):
+    """商品化向けの最低限のパスワード安全性チェック。"""
+    login_id = clean_text(login_id).lower()
+    new_password = clean_text(new_password)
+    confirm_password = clean_text(confirm_password)
+
+    if not new_password:
+        return False, "新しいパスワードを入力してください。"
+    if new_password != confirm_password:
+        return False, "確認用パスワードが一致しません。"
+    if len(new_password) < 8:
+        return False, "パスワードは8文字以上にしてください。"
+    if new_password.lower() in ["rui", "password", "password123", "12345678", "admin123"]:
+        return False, "推測されやすいパスワードは使用できません。"
+    if login_id and login_id in new_password.lower():
+        return False, "ログインIDを含むパスワードは使用できません。"
+    if not re.search(r"[A-Za-z]", new_password) or not re.search(r"[0-9]", new_password):
+        return False, "英字と数字を両方含めてください。"
+    if current_hash and verify_password(new_password, current_hash):
+        return False, "現在と同じパスワードは使用できません。"
+    return True, ""
+
+
+def update_account_password(login_id, new_password, force_change="いいえ"):
+    """パスワードを更新し、初回変更必須フラグを更新する。"""
+    accounts = load_accounts()
+    login_id = clean_text(login_id).lower()
+    matches = accounts[accounts["ログインID"] == login_id].index.tolist()
+    if not matches:
+        return False, "アカウントが見つかりません。"
+    idx = matches[-1]
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    accounts.at[idx, "パスワードハッシュ"] = hash_password(new_password)
+    accounts.at[idx, "初回パスワード変更必須"] = "はい" if force_change in [True, "はい", "1", "true"] else "いいえ"
+    accounts.at[idx, "最終パスワード変更日時"] = now_text
+    accounts.at[idx, "更新日時"] = now_text
+    save_accounts(accounts)
+    try:
+        add_audit_log("パスワード変更", "login_accounts", login_id, "パスワードを更新し、初回変更必須フラグを解除/設定")
+    except Exception:
+        pass
+    return True, "パスワードを更新しました。"
+
+
 def authenticate_user(login_id, password):
     """ログインID・パスワードを認証し、アカウント情報dictを返す。"""
     login_id = clean_text(login_id).lower()
@@ -1524,6 +1609,11 @@ def show_login_user_management_menu():
                 with c3:
                     status = st.selectbox("状態", ["有効", "無効"], index=0 if clean_text(row.get("状態"), "有効") == "有効" else 1)
                 new_password = st.text_input("新しいパスワード（変更しない場合は空欄）", type="password")
+                force_change_next = st.checkbox(
+                    "次回ログイン時にパスワード変更を求める",
+                    value=account_requires_password_change(row.to_dict()),
+                    help="仮パスワードを管理者が設定した場合はONにしてください。",
+                )
                 memo = st.text_area("備考", value=clean_text(row.get("備考")), height=80)
                 submitted = st.form_submit_button("この内容で更新", type="primary", use_container_width=True)
 
@@ -1537,11 +1627,18 @@ def show_login_user_management_menu():
                     accounts.at[idx, "表示名"] = clean_text(label, selected_id)
                     accounts.at[idx, "権限"] = role
                     accounts.at[idx, "状態"] = status
+                    if clean_text(new_password):
+                        ok_pw, pw_msg = validate_new_password(selected_id, new_password, new_password, clean_text(accounts.at[idx, "パスワードハッシュ"]))
+                        if not ok_pw:
+                            st.error(pw_msg)
+                            st.stop()
+                        accounts.at[idx, "パスワードハッシュ"] = hash_password(new_password)
+                        accounts.at[idx, "最終パスワード変更日時"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    accounts.at[idx, "初回パスワード変更必須"] = "はい" if force_change_next else "いいえ"
                     accounts.at[idx, "備考"] = clean_text(memo)
                     accounts.at[idx, "更新日時"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    if clean_text(new_password):
-                        accounts.at[idx, "パスワードハッシュ"] = hash_password(new_password)
                     save_accounts(accounts)
+                    add_audit_log("アカウント更新", "login_accounts", selected_id, "アカウント情報を更新")
                     st.success("アカウントを更新しました。")
                     st.rerun()
 
@@ -1570,6 +1667,7 @@ def show_login_user_management_menu():
             with c2:
                 new_role = st.selectbox("権限", ["staff", "admin"], index=0)
                 new_status = st.selectbox("状態", ["有効", "無効"], index=0)
+            new_force_change = st.checkbox("初回ログイン時にパスワード変更を必須にする", value=True)
             pw1 = st.text_input("パスワード", type="password")
             pw2 = st.text_input("パスワード確認", type="password")
             new_memo = st.text_area("備考", height=80)
@@ -1586,6 +1684,10 @@ def show_login_user_management_menu():
             elif pw1 != pw2:
                 st.error("パスワード確認が一致しません。")
             else:
+                ok_pw, pw_msg = validate_new_password(login_id, pw1, pw2, "")
+                if not ok_pw:
+                    st.error(pw_msg)
+                    st.stop()
                 accounts = load_accounts()
                 if login_id in accounts["ログインID"].tolist():
                     st.error("同じログインIDが既に存在します。")
@@ -1600,6 +1702,8 @@ def show_login_user_management_menu():
                         "備考": clean_text(new_memo),
                         "作成日時": now_text,
                         "更新日時": now_text,
+                        "初回パスワード変更必須": "はい" if new_force_change else "いいえ",
+                        "最終パスワード変更日時": "",
                     }
                     accounts = pd.concat([accounts, pd.DataFrame([row], columns=ACCOUNT_COLUMNS)], ignore_index=True)
                     save_accounts(accounts)
@@ -6855,6 +6959,60 @@ def show_structured_insight_menu():
 # =========================
 # ログイン・デザイン
 # =========================
+def show_force_password_change_screen():
+    """初回ログイン・仮パスワード利用時に通常画面へ進ませず、パスワード変更を求める。"""
+    show_hidamari_hero("login")
+    login_id = current_login_user()
+    accounts = load_accounts()
+    hit = accounts[accounts["ログインID"] == login_id]
+    if hit.empty:
+        st.error("ログイン情報を確認できません。もう一度ログインしてください。")
+        if st.button("ログイン画面へ戻る", use_container_width=True):
+            st.session_state.logged_in = False
+            st.rerun()
+        return False
+
+    row = hit.iloc[-1]
+    st.warning("安全のため、初回ログイン時はパスワード変更が必要です。")
+    st.caption("仮パスワードのまま通常画面へ進むことはできません。新しいパスワードを設定してください。")
+
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        with st.form("force_password_change_form", clear_on_submit=False):
+            st.markdown("### 初回パスワード変更")
+            st.text_input("ログインID", value=login_id, disabled=True)
+            new_pw = st.text_input("新しいパスワード", type="password", help="8文字以上、英字と数字を両方含めてください。")
+            new_pw2 = st.text_input("新しいパスワード（確認）", type="password")
+            submitted = st.form_submit_button("パスワードを変更して利用開始", type="primary", use_container_width=True)
+
+        if submitted:
+            ok_pw, pw_msg = validate_new_password(login_id, new_pw, new_pw2, clean_text(row.get("パスワードハッシュ")))
+            if not ok_pw:
+                st.error(pw_msg)
+            else:
+                ok, msg = update_account_password(login_id, new_pw, force_change="いいえ")
+                if ok:
+                    add_login_history(login_id, st.session_state.get("user_label", ""), st.session_state.get("role", ""), "成功", "初回パスワード変更完了")
+                    st.session_state.force_password_change = False
+                    st.session_state["hidamari_login_message"] = "安全設定が完了しました。今日の記録をはじめられます。"
+                    st.success("パスワードを変更しました。通常画面へ進みます。")
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+        if st.button("ログアウト", use_container_width=True):
+            st.session_state.logged_in = False
+            st.session_state.role = None
+            st.session_state.user_label = ""
+            st.session_state.username = ""
+            st.session_state.user_id = ""
+            st.session_state.login_user = ""
+            st.session_state.login_user_info = {}
+            st.session_state.force_password_change = False
+            st.rerun()
+    return False
+
+
 def login_check():
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
@@ -6862,8 +7020,12 @@ def login_check():
         st.session_state.role = None
     if "user_label" not in st.session_state:
         st.session_state.user_label = ""
+    if "force_password_change" not in st.session_state:
+        st.session_state.force_password_change = False
 
     if st.session_state.logged_in:
+        if st.session_state.force_password_change:
+            return show_force_password_change_screen()
         return True
 
     show_hidamari_hero("login")
@@ -6893,6 +7055,7 @@ def login_check():
                     "role": st.session_state.role,
                     "label": st.session_state.user_label,
                 }
+                st.session_state.force_password_change = account_requires_password_change(user)
                 st.session_state["hidamari_login_message"] = random.choice(HIDAMARI_MESSAGES)
                 st.rerun()
             else:
@@ -6912,6 +7075,7 @@ def logout_button():
             st.session_state.user_id = ""
             st.session_state.login_user = ""
             st.session_state.login_user_info = {}
+            st.session_state.force_password_change = False
             st.session_state.pop("hidamari_login_message", None)
             st.rerun()
 
@@ -6919,7 +7083,7 @@ def logout_button():
 # =========================
 # Ver3.0 UI共通設定・共通部品
 # =========================
-APP_VERSION = "Ver3.5 UI/UX商品化版"
+APP_VERSION = "Ver3.9 初回パスワード変更必須化版"
 APP_COPY = "押し間違えず、迷わず、観察して次につなぐ 現場OS"
 
 UI_COLORS = {
