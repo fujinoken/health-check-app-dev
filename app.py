@@ -1698,6 +1698,120 @@ def show_user_name_alias_master_menu():
                 st.rerun()
 
 
+# =========================
+# Ver4.2 体重は「測定した日だけ入力」
+# =========================
+def parse_optional_weight(value):
+    """体重は毎日必須にせず、未測定なら空欄で保存する。"""
+    text = clean_text(value)
+    if text == "":
+        return "", ""
+    text = text.replace("kg", "").replace("ＫＧ", "").replace("ｋｇ", "").strip()
+    try:
+        weight = float(text)
+    except Exception:
+        return "", "体重は数値で入力してください。未測定の場合は空欄でOKです。"
+    if weight <= 0:
+        return "", "体重は0より大きい数値で入力してください。未測定の場合は空欄でOKです。"
+    if weight > 200:
+        return "", "体重が200kgを超えています。入力値を確認してください。"
+    return round(weight, 1), ""
+
+
+def format_weight_value(value):
+    w = safe_float(value, 0)
+    if w <= 0:
+        return ""
+    return f"{w:.1f}"
+
+
+def build_latest_weight_summary(health_df, users=None, target_date=None):
+    """利用者ごとの最新体重を返す。体重0・空欄は未測定として扱う。"""
+    if target_date is None:
+        target_date = date.today()
+    try:
+        target_date = pd.to_datetime(target_date).date()
+    except Exception:
+        target_date = date.today()
+
+    users = users or []
+    rows = []
+    work = health_df.copy() if health_df is not None else pd.DataFrame(columns=HEALTH_COLUMNS)
+    if not work.empty:
+        work["記録日"] = pd.to_datetime(work["記録日"], errors="coerce")
+        work["体重_num"] = pd.to_numeric(work.get("体重", ""), errors="coerce")
+        work = work[(work["記録日"].notna()) & (work["体重_num"].notna()) & (work["体重_num"] > 0)].copy()
+
+    for user in users:
+        user = clean_text(user)
+        if not user:
+            continue
+        latest = pd.DataFrame()
+        if not work.empty and "利用者名" in work.columns:
+            latest = work[work["利用者名"].astype(str).str.strip() == user].sort_values("記録日")
+        if latest.empty:
+            rows.append({
+                "利用者名": user,
+                "最新体重": "未測定",
+                "測定日": "",
+                "経過日数": "",
+                "状態": "体重記録なし",
+            })
+        else:
+            r = latest.iloc[-1]
+            measured_date = pd.to_datetime(r.get("記録日"), errors="coerce").date()
+            days = (target_date - measured_date).days
+            rows.append({
+                "利用者名": user,
+                "最新体重": f"{float(r.get('体重_num')):.1f}kg",
+                "測定日": measured_date.strftime("%Y/%m/%d"),
+                "経過日数": f"{days}日前" if days >= 0 else "確認日より後",
+                "状態": "14日以上未測定" if days >= 14 else "OK",
+            })
+    return pd.DataFrame(rows, columns=["利用者名", "最新体重", "測定日", "経過日数", "状態"])
+
+
+def build_weight_not_measured_users(health_df, users=None, target_date=None, threshold_days=14):
+    """14日以上体重未測定、または体重記録なしの利用者を返す。"""
+    summary = build_latest_weight_summary(health_df, users, target_date)
+    if summary.empty:
+        return summary
+
+    def is_overdue(row):
+        status = clean_text(row.get("状態"))
+        if status == "体重記録なし":
+            return True
+        days_text = clean_text(row.get("経過日数"))
+        m = re.search(r"(\d+)", days_text)
+        return bool(m and int(m.group(1)) >= threshold_days)
+
+    out = summary[summary.apply(is_overdue, axis=1)].copy()
+    if not out.empty:
+        out["確認すること"] = "体重測定の予定を確認してください。未測定には理由がある場合があります。"
+    return out
+
+
+def show_latest_weight_block(health_df, users=None, target_date=None):
+    st.subheader("最新体重")
+    st.caption("体重は毎日入力ではなく、測定した日だけ入力します。最新の測定値を確認します。")
+    summary = build_latest_weight_summary(health_df, users, target_date)
+    if summary.empty:
+        st.info("利用者または健康チェックデータがありません。")
+    else:
+        st.dataframe(summary, use_container_width=True, hide_index=True)
+
+
+def show_weight_overdue_block(health_df, users=None, target_date=None, threshold_days=14):
+    st.subheader(f"{threshold_days}日以上体重未測定")
+    st.caption("未入力を責めるためではなく、測定予定・拒否・体調などを確認するための表示です。")
+    overdue = build_weight_not_measured_users(health_df, users, target_date, threshold_days=threshold_days)
+    if overdue.empty:
+        st.success(f"{threshold_days}日以上体重未測定の利用者はいません。")
+    else:
+        st.warning("体重測定の予定を確認したい利用者がいます。")
+        st.dataframe(overdue, use_container_width=True, hide_index=True)
+
+
 def ensure_excel_file(path, sheet_name, columns):
     """
     Ver3.4以降の互換用。
@@ -8633,6 +8747,7 @@ DASHBOARD_ITEMS = {
     "排便3日なし": "確認日までに排便が3日間ない利用者を表示",
     "注意利用者": "発熱・SpO2低下・食事低下・気になる変化などを表示",
     "確認日の排泄状況": "確認日の排泄記録を表示",
+    "最新体重・未測定確認": "最新体重と14日以上未測定を表示",
     "LIFE不足チェック": "LIFE確認・加算確認・CSV出力の不足を表示",
     "短期目標 実施状況": "短期目標の実施状況を表示",
 }
@@ -8642,6 +8757,7 @@ DEFAULT_DASHBOARD_ITEMS = [
     "未対応・至急申し送り",
     "排便3日なし",
     "注意利用者",
+    "最新体重・未測定確認",
 ]
 
 def load_dashboard_settings(username=None):
@@ -8813,6 +8929,13 @@ def show_my_dashboard_blocks(target_date=None):
         except Exception as e:
             st.warning(f"注意利用者を表示できませんでした: {e}")
 
+    if "最新体重・未測定確認" in enabled:
+        try:
+            show_latest_weight_block(health_df, active_users if "active_users" in globals() else None, target_date)
+            show_weight_overdue_block(health_df, active_users if "active_users" in globals() else None, target_date, threshold_days=14)
+        except Exception as e:
+            st.warning(f"体重確認を表示できませんでした: {e}")
+
     if "確認日の排泄状況" in enabled:
         st.subheader("確認日の排泄状況")
         try:
@@ -8910,6 +9033,10 @@ if menu == "管理者ダッシュボード":
 
     ex_sum = summarize_excretion(target_excretion)
     col4.metric("確認日の排便記録", ex_sum["排便回数"])
+
+    st.markdown("---")
+    show_latest_weight_block(health_df, active_users, target_date)
+    show_weight_overdue_block(health_df, active_users, target_date, threshold_days=14)
 
     # 出勤時に最初に確認したい項目として、業務全体申し送りを上部に表示
     st.markdown("---")
@@ -9118,7 +9245,14 @@ elif menu == "健康チェック入力":
         with c5:
             spo2 = st.number_input("SpO2", min_value=0, max_value=100, value=row_int("SpO2", 0), step=1)
         with c6:
-            weight = st.number_input("体重", min_value=0.0, max_value=200.0, value=row_float("体重", 0.0), step=0.1)
+            existing_weight_text = format_weight_value(row_text("体重", ""))
+            weight_raw = st.text_input(
+                "体重（任意）",
+                value=existing_weight_text,
+                placeholder="例：56.2",
+                help="週1回など、測定した日だけ入力します。未測定の場合は空欄でOKです。",
+            )
+            st.caption("※未測定の場合は空欄でOK")
 
         st.divider()
         st.subheader("食事摂取量（LIFE向け標準化）")
@@ -9158,6 +9292,11 @@ elif menu == "健康チェック入力":
         submitted = st.form_submit_button("登録する")
 
     if submitted:
+        weight, weight_error = parse_optional_weight(weight_raw)
+        if weight_error:
+            st.error(weight_error)
+            st.stop()
+
         record = {
             "記録日": record_date,
             "利用者名": user_name,
@@ -9517,7 +9656,10 @@ elif menu == "過去データ管理":
                     with c5:
                         spo2 = st.number_input("SpO2", value=safe_int(row.get("SpO2"), 0), step=1)
                     with c6:
-                        weight = st.number_input("体重", value=safe_float(row.get("体重"), 0.0), step=0.1)
+                        weight_text = st.text_input("体重（任意）", value=format_weight_value(row.get("体重", "")), help="未測定の場合は空欄でOKです。")
+                        weight, weight_error = parse_optional_weight(weight_text)
+                        if weight_error:
+                            st.warning(weight_error)
 
                     m1, m2, m3 = st.columns(3)
                     with m1:
@@ -10145,7 +10287,7 @@ elif menu == "管理者支援":
     health_df = load_health_data()
     ex_df = load_excretion_data()
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "AI家族レポート",
         "バイタル推移グラフ",
         "気になる変化",
@@ -10153,6 +10295,7 @@ elif menu == "管理者支援":
         "申し送り支援",
         "注意通知",
         "条件設定マスタ変更",
+        "体重未測定確認",
     ])
 
     with tab1:
@@ -10326,6 +10469,13 @@ elif menu == "管理者支援":
         st.subheader("条件設定マスタ変更")
         st.caption("未排便・発熱・SpO2低下・食事量低下など、業務全体申し送りや注意通知で使う抽出条件を管理します。")
         show_alert_condition_master_menu()
+
+    with tab8:
+        st.subheader("体重未測定確認")
+        st.caption("体重は測定した日だけ入力します。14日以上測定が空いている場合だけ確認対象にします。")
+        check_day = st.date_input("確認日", value=date.today(), key="weight_overdue_check_day")
+        show_latest_weight_block(health_df, all_users, check_day)
+        show_weight_overdue_block(health_df, all_users, check_day, threshold_days=14)
 
 
 # =========================
