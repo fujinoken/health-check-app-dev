@@ -732,10 +732,6 @@ BACKUP_HISTORY_COLUMNS = [
     "実行者",
     "結果",
     "メモ",
-    "SHA256",
-    "世代",
-    "対象",
-    "検証結果",
 ]
 
 DEFAULT_ROLE_PERMISSIONS = [
@@ -746,13 +742,6 @@ DEFAULT_ROLE_PERMISSIONS = [
     {"権限": "staff", "機能": "日々の実施チェック", "閲覧": 1, "登録更新": 1, "削除": 0, "復元": 0, "備考": "職員は短期目標の実施入力可能"},
 ]
 
-BACKUP_KEEP_POLICY = {
-    "自動": 30,
-    "手動": 20,
-    "復元前": 10,
-    "復元": 20,
-}
-
 
 def ensure_security_dirs():
     ensure_dirs()
@@ -761,7 +750,7 @@ def ensure_security_dirs():
 
 
 def ensure_security_tables():
-    """監査ログ・権限・バックアップ履歴テーブルを作成する。"""
+    """セキュリティ関連テーブルを作成する。"""
     ensure_security_dirs()
     save_sqlite_table(
         load_sqlite_table(SQLITE_TABLE_AUDIT_LOGS, AUDIT_LOG_COLUMNS),
@@ -779,9 +768,8 @@ def ensure_security_tables():
         ROLE_PERMISSION_COLUMNS,
         unique_cols=["権限", "機能"],
     )
-    history = load_sqlite_table(SQLITE_TABLE_BACKUP_HISTORY, BACKUP_HISTORY_COLUMNS)
     save_sqlite_table(
-        history,
+        load_sqlite_table(SQLITE_TABLE_BACKUP_HISTORY, BACKUP_HISTORY_COLUMNS),
         SQLITE_TABLE_BACKUP_HISTORY,
         BACKUP_HISTORY_COLUMNS,
         unique_cols=["バックアップID"],
@@ -800,20 +788,6 @@ def get_current_user_info_for_log():
     return login_id, label, role
 
 
-def _safe_audit_text(value, limit=3000):
-    """監査ログに保存できる安全な文字列へ変換する。長文は切る。"""
-    if isinstance(value, (dict, list, tuple)):
-        try:
-            text = json.dumps(value, ensure_ascii=False, default=str)
-        except Exception:
-            text = str(value)
-    else:
-        text = clean_text(value)
-    if len(text) > limit:
-        return text[:limit] + "...（省略）"
-    return text
-
-
 def add_audit_log(operation, table_name="", target_key="", summary="", before="", after=""):
     """誰が、いつ、何をしたかをSQLiteに保存する。"""
     try:
@@ -829,14 +803,14 @@ def add_audit_log(operation, table_name="", target_key="", summary="", before=""
             "操作種別": clean_text(operation),
             "対象テーブル": clean_text(table_name),
             "対象キー": clean_text(target_key),
-            "概要": _safe_audit_text(summary, 1000),
-            "変更前": _safe_audit_text(before, 3000),
-            "変更後": _safe_audit_text(after, 3000),
+            "概要": clean_text(summary),
+            "変更前": clean_text(before),
+            "変更後": clean_text(after),
         }
         df = pd.concat([df, pd.DataFrame([row], columns=AUDIT_LOG_COLUMNS)], ignore_index=True)
-        # 商品版は直近10000件を保持。多すぎる場合はExcel出力後に別保管。
-        if len(df) > 10000:
-            df = df.tail(10000)
+        # 長期運用で肥大化しすぎないよう直近5000件を保持
+        if len(df) > 5000:
+            df = df.tail(5000)
         save_sqlite_table(df, SQLITE_TABLE_AUDIT_LOGS, AUDIT_LOG_COLUMNS, unique_cols=["監査ID"], sort_cols=["日時"])
     except Exception:
         # 監査ログ失敗で本体入力を止めない
@@ -853,6 +827,7 @@ def has_permission(feature_name, action="閲覧"):
         perms = load_sqlite_table(SQLITE_TABLE_ROLE_PERMISSIONS, ROLE_PERMISSION_COLUMNS)
         if perms.empty:
             return False
+        # 全機能または対象機能の行を見る
         candidates = perms[
             (perms["権限"].astype(str) == role)
             & ((perms["機能"].astype(str) == feature_name) | (perms["機能"].astype(str) == "全機能"))
@@ -873,18 +848,7 @@ def require_permission(feature_name, action="閲覧"):
     return True
 
 
-def file_sha256(file_path):
-    path = Path(file_path)
-    if not path.exists() or not path.is_file():
-        return ""
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def record_backup_history(kind, file_path, result="成功", memo="", checksum="", generation="", target="", verify_result=""):
+def record_backup_history(kind, file_path, result="成功", memo=""):
     try:
         ensure_security_tables()
         df = load_sqlite_table(SQLITE_TABLE_BACKUP_HISTORY, BACKUP_HISTORY_COLUMNS)
@@ -896,149 +860,57 @@ def record_backup_history(kind, file_path, result="成功", memo="", checksum=""
         row = {
             "バックアップID": str(uuid.uuid4()),
             "日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "種類": clean_text(kind),
+            "種類": kind,
             "ファイル名": Path(file_path).name if file_path else "",
             "サイズKB": size_kb,
             "実行者": current_login_user(),
-            "結果": clean_text(result),
-            "メモ": clean_text(memo),
-            "SHA256": clean_text(checksum),
-            "世代": clean_text(generation),
-            "対象": clean_text(target),
-            "検証結果": clean_text(verify_result),
+            "結果": result,
+            "メモ": memo,
         }
         df = pd.concat([df, pd.DataFrame([row], columns=BACKUP_HISTORY_COLUMNS)], ignore_index=True)
-        if len(df) > 2000:
-            df = df.tail(2000)
+        if len(df) > 1000:
+            df = df.tail(1000)
         save_sqlite_table(df, SQLITE_TABLE_BACKUP_HISTORY, BACKUP_HISTORY_COLUMNS, unique_cols=["バックアップID"], sort_cols=["日時"])
     except Exception:
         pass
 
 
-def list_backup_files(kind=None):
-    ensure_security_dirs()
-    files = sorted(BACKUP_DIR.glob("hidamari_backup_*.zip"), key=lambda x: x.stat().st_mtime, reverse=True)
-    if kind:
-        files = [f for f in files if f"hidamari_backup_{kind}_" in f.name]
-    return files
-
-
-def cleanup_backup_generations():
-    """バックアップ世代管理。種類ごとに指定数だけ残す。"""
-    try:
-        ensure_security_dirs()
-        for kind, keep in BACKUP_KEEP_POLICY.items():
-            files = list_backup_files(kind=kind)
-            for old in files[int(keep):]:
-                try:
-                    old.unlink()
-                    add_audit_log("バックアップ世代整理", "backup_history", old.name, f"{kind}バックアップの古い世代を削除")
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-
-def verify_backup_zip(zip_path):
-    """バックアップZIPの最低限の検証。DB本体・ZIP破損・マニフェストを確認する。"""
-    try:
-        path = Path(zip_path)
-        if not path.exists():
-            return False, "バックアップファイルが存在しません。"
-        with zipfile.ZipFile(path, "r") as zf:
-            corrupt = zf.testzip()
-            if corrupt:
-                return False, f"ZIP内のファイルが破損している可能性があります：{corrupt}"
-            names = zf.namelist()
-            if f"data/{HIDAMARI_DB_FILE.name}" not in names:
-                return False, "hidamari_health.db が含まれていません。"
-            if "backup_manifest.json" not in names:
-                return True, "検証OK（旧形式：manifestなし）"
-        return True, "検証OK"
-    except Exception as e:
-        return False, f"検証エラー：{e}"
-
-
-def _backup_manifest(kind, files_written):
-    return {
-        "app": "hidamari_health_check_system",
-        "backup_kind": clean_text(kind),
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "created_by": current_login_user(),
-        "db_file": str(HIDAMARI_DB_FILE),
-        "db_integrity": DB_LAST_INTEGRITY_RESULT,
-        "files": files_written,
-        "storage_policy": get_storage_unification_status() if "get_storage_unification_status" in globals() else {"正データ": "SQLite"},
-    }
-
 
 def create_backup_zip(kind="手動"):
     """
     SQLite正本のDBと添付ファイルをZIP化して保存する。
-    商品版ではExcel/JSON互換ファイルをバックアップ対象にしない。
-    manifestとSHA256を残し、復元時に検証できるようにする。
+    商品版ではExcel/JSON互換ファイルをバックアップ対象にしません。
     """
     ensure_security_dirs()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     zip_path = BACKUP_DIR / f"hidamari_backup_{kind}_{timestamp}.zip"
-    files_written = []
 
     try:
-        # 作成前に整合性チェックとWALチェックポイント
-        try:
-            run_db_integrity_check(auto_repair=True)
-        except Exception:
-            pass
         if HIDAMARI_DB_FILE.exists():
             with get_hidamari_conn() as conn:
                 conn.execute("PRAGMA wal_checkpoint(FULL);")
 
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             if HIDAMARI_DB_FILE.exists():
-                arc = f"data/{HIDAMARI_DB_FILE.name}"
-                zf.write(HIDAMARI_DB_FILE, arcname=arc)
-                files_written.append(arc)
+                zf.write(HIDAMARI_DB_FILE, arcname=f"data/{HIDAMARI_DB_FILE.name}")
 
-            # 旧仕様やLIFE系の別DBが残っている場合も安全側で含める
             for life_db in [DATA_DIR / "hidamari_life.db", Path("hidamari_life.db")]:
                 if life_db.exists():
-                    arc = f"data/{life_db.name}"
-                    zf.write(life_db, arcname=arc)
-                    files_written.append(arc)
+                    zf.write(life_db, arcname=f"data/{life_db.name}")
 
             for folder in [BUSINESS_HANDOVER_PHOTO_DIR, BUSINESS_HANDOVER_EXCEL_DIR]:
                 if folder.exists():
                     for file in folder.rglob("*"):
                         if file.is_file():
-                            arc = str(file).replace("\\", "/")
-                            zf.write(file, arcname=arc)
-                            files_written.append(arc)
+                            zf.write(file, arcname=str(file))
 
-            manifest = _backup_manifest(kind, files_written)
-            zf.writestr("backup_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2, default=str))
-
-        ok, verify_msg = verify_backup_zip(zip_path)
-        checksum = file_sha256(zip_path)
-        result = "成功" if ok else "要確認"
-        record_backup_history(
-            kind,
-            zip_path,
-            result,
-            "SQLite正本バックアップ作成",
-            checksum=checksum,
-            generation=str(len(list_backup_files(kind=kind))),
-            target="SQLite DB + 添付ファイル",
-            verify_result=verify_msg,
-        )
-        add_audit_log("バックアップ作成", "backup_history", zip_path.name, f"{kind}バックアップを作成：{verify_msg}", after={"sha256": checksum})
-        cleanup_backup_generations()
-        return zip_path, "" if ok else verify_msg
+        record_backup_history(kind, zip_path, "成功", "SQLite正本バックアップ作成")
+        add_audit_log("バックアップ作成", "backup_history", zip_path.name, f"{kind}バックアップを作成")
+        return zip_path, ""
     except Exception as e:
-        record_backup_history(kind, zip_path, "失敗", str(e), target="SQLite DB + 添付ファイル")
+        record_backup_history(kind, zip_path, "失敗", str(e))
         add_audit_log("バックアップ失敗", "backup_history", zip_path.name, str(e))
         return None, str(e)
-
-
 def run_daily_auto_backup():
     """1日1回だけ自動バックアップを作成する。"""
     try:
@@ -1050,21 +922,20 @@ def run_daily_auto_backup():
         zip_path, err = create_backup_zip(kind="自動")
         if zip_path and not err:
             marker.write_text(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
-            cleanup_backup_generations()
-    except Exception as e:
-        add_audit_log("自動バックアップ失敗", "backup_history", "", str(e))
+            # 古い自動バックアップは30世代程度に整理
+            auto_files = sorted(BACKUP_DIR.glob("hidamari_backup_自動_*.zip"), key=lambda x: x.stat().st_mtime, reverse=True)
+            for old in auto_files[30:]:
+                try:
+                    old.unlink()
+                except Exception:
+                    pass
+    except Exception:
+        # 自動バックアップ失敗で本体起動を止めない
+        pass
 
 
-def _read_uploaded_or_path(uploaded_file_or_path):
-    if isinstance(uploaded_file_or_path, (str, Path)):
-        path = Path(uploaded_file_or_path)
-        return path.name, path.read_bytes()
-    filename = clean_text(getattr(uploaded_file_or_path, "name", "restore.zip"), "restore.zip")
-    uploaded_file_or_path.seek(0)
-    return filename, uploaded_file_or_path.read()
 
-
-def restore_from_backup_zip(uploaded_file_or_path):
+def restore_from_backup_zip(uploaded_file):
     """SQLite正本バックアップZIPからDB等を復元する。管理者のみ。"""
     if not is_admin_user():
         return False, "管理者のみ復元できます。"
@@ -1075,57 +946,34 @@ def restore_from_backup_zip(uploaded_file_or_path):
         return False, f"復元前バックアップに失敗しました：{pre_err}"
 
     try:
-        filename, raw = _read_uploaded_or_path(uploaded_file_or_path)
+        filename = clean_text(getattr(uploaded_file, "name", "restore.zip"), "restore.zip")
         restore_zip_path = RESTORE_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}"
-        restore_zip_path.write_bytes(raw)
-
-        ok, verify_msg = verify_backup_zip(restore_zip_path)
-        if not ok:
-            add_audit_log("データ復元拒否", "restore", restore_zip_path.name, verify_msg)
-            return False, verify_msg
-
-        # 復元直前にDB接続のWALを閉じやすくする
-        try:
-            if HIDAMARI_DB_FILE.exists():
-                with get_hidamari_conn() as conn:
-                    conn.execute("PRAGMA wal_checkpoint(FULL);")
-        except Exception:
-            pass
+        uploaded_file.seek(0)
+        restore_zip_path.write_bytes(uploaded_file.read())
 
         with zipfile.ZipFile(restore_zip_path, "r") as zf:
             names = zf.namelist()
-            HIDAMARI_DB_FILE.parent.mkdir(parents=True, exist_ok=True)
+            if f"data/{HIDAMARI_DB_FILE.name}" not in names:
+                return False, "このZIPには hidamari_health.db が含まれていません。"
+
             HIDAMARI_DB_FILE.write_bytes(zf.read(f"data/{HIDAMARI_DB_FILE.name}"))
 
             if "data/hidamari_life.db" in names:
                 (DATA_DIR / "hidamari_life.db").write_bytes(zf.read("data/hidamari_life.db"))
 
             for folder in [BUSINESS_HANDOVER_PHOTO_DIR, BUSINESS_HANDOVER_EXCEL_DIR]:
-                folder.mkdir(parents=True, exist_ok=True)
                 for name in names:
-                    normalized_folder = str(folder).replace("\\", "/")
-                    if name.startswith(normalized_folder) and not name.endswith("/"):
+                    if name.startswith(str(folder)) and not name.endswith("/"):
                         target = Path(name)
                         target.parent.mkdir(parents=True, exist_ok=True)
                         target.write_bytes(zf.read(name))
 
-        # 復元後チェック
-        result = run_db_integrity_check(auto_repair=True)
-        if result.get("ok"):
-            msg = f"復元しました。復元前バックアップも作成済みです：{pre_backup.name if pre_backup else ''}"
-            add_audit_log("データ復元", "restore", restore_zip_path.name, msg, before=str(pre_backup), after=verify_msg)
-            record_backup_history("復元", restore_zip_path, "成功", "SQLite正本バックアップZIPから復元", checksum=file_sha256(restore_zip_path), target="SQLite DB + 添付ファイル", verify_result=verify_msg)
-            return True, msg
-        else:
-            msg = "復元後のDB整合性チェックで要確認になりました。復元前バックアップから戻せます。"
-            add_audit_log("データ復元後チェック要確認", "restore", restore_zip_path.name, msg, before=str(pre_backup), after=str(result))
-            record_backup_history("復元", restore_zip_path, "要確認", msg, checksum=file_sha256(restore_zip_path), target="SQLite DB + 添付ファイル", verify_result=str(result))
-            return False, msg
+        add_audit_log("データ復元", "restore", restore_zip_path.name, "SQLite正本バックアップZIPから復元")
+        record_backup_history("復元", restore_zip_path, "成功", "SQLite正本バックアップZIPから復元")
+        return True, f"復元しました。復元前バックアップも作成済みです：{pre_backup.name if pre_backup else ''}"
     except Exception as e:
-        add_audit_log("データ復元失敗", "restore", "", str(e), before=str(pre_backup))
+        add_audit_log("データ復元失敗", "restore", "", str(e))
         return False, f"復元に失敗しました：{e}"
-
-
 def show_security_maintenance_menu():
     if not is_admin_user():
         st.warning("このメニューは管理者専用です。")
@@ -1133,34 +981,24 @@ def show_security_maintenance_menu():
 
     ensure_security_tables()
     st.header("セキュリティ・保守管理")
-    st.caption("監査ログ・自動/手動バックアップ・世代管理・1クリック復元・DB整合性チェックをまとめています。")
+    st.caption("DBバックアップ・復元・監査ログ・権限管理を、この画面にまとめています。")
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["バックアップ", "監査ログ", "権限管理", "データ復元", "DB整合性", "事故耐性サマリー"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["バックアップ", "監査ログ", "権限管理", "データ復元", "DB整合性"])
 
     with tab1:
         st.subheader("バックアップ")
-        st.write("SQLite正本DBと添付ファイルをZIPで保存します。Excel/JSON互換ファイルは正データとして扱いません。")
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("今すぐ手動バックアップを作成", type="primary", use_container_width=True):
-                zip_path, err = create_backup_zip(kind="手動")
-                if err:
-                    st.warning(f"バックアップは作成されましたが確認が必要です：{err}" if zip_path else err)
-                else:
-                    st.success(f"バックアップを作成しました：{zip_path.name}")
-        with c2:
-            if st.button("バックアップ世代を整理", use_container_width=True):
-                cleanup_backup_generations()
-                st.success("世代管理ルールに基づき整理しました。")
-                st.rerun()
+        st.write("SQLite DB、利用者マスタ、ログイン情報、写真・添付ファイルをZIPで保存します。")
+        if st.button("今すぐ手動バックアップを作成", type="primary", use_container_width=True):
+            zip_path, err = create_backup_zip(kind="手動")
+            if err:
+                st.error(err)
+            else:
+                st.success(f"バックアップを作成しました：{zip_path.name}")
 
-        backups = list_backup_files()
+        backups = sorted(BACKUP_DIR.glob("hidamari_backup_*.zip"), key=lambda x: x.stat().st_mtime, reverse=True)
         if backups:
             selected = st.selectbox("ダウンロードするバックアップ", [b.name for b in backups])
             target = BACKUP_DIR / selected
-            ok, verify_msg = verify_backup_zip(target)
-            st.success(verify_msg) if ok else st.error(verify_msg)
-            st.caption(f"SHA256: {file_sha256(target)}")
             with open(target, "rb") as f:
                 st.download_button(
                     "選択したバックアップをダウンロード",
@@ -1178,29 +1016,24 @@ def show_security_maintenance_menu():
         if history.empty:
             st.info("履歴はまだありません。")
         else:
-            st.dataframe(history.sort_values("日時", ascending=False).head(300), use_container_width=True, hide_index=True)
+            st.dataframe(history.sort_values("日時", ascending=False).head(200), use_container_width=True, hide_index=True)
 
     with tab2:
         st.subheader("監査ログ")
-        st.caption("誰が・いつ・何を変更したかを確認します。削除・復元・権限エラーも記録されます。")
         logs = load_sqlite_table(SQLITE_TABLE_AUDIT_LOGS, AUDIT_LOG_COLUMNS)
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         with c1:
             op_filter = st.text_input("操作種別で検索", key="audit_op_filter")
         with c2:
             user_filter = st.text_input("ログインIDで検索", key="audit_user_filter")
         with c3:
-            table_filter = st.text_input("対象テーブルで検索", key="audit_table_filter")
-        with c4:
-            limit = st.number_input("表示件数", min_value=50, max_value=2000, value=300, step=50)
+            limit = st.number_input("表示件数", min_value=50, max_value=1000, value=200, step=50)
         view = logs.copy()
         if not view.empty:
             if clean_text(op_filter):
                 view = view[view["操作種別"].astype(str).str.contains(clean_text(op_filter), case=False, na=False)]
             if clean_text(user_filter):
                 view = view[view["ログインID"].astype(str).str.contains(clean_text(user_filter), case=False, na=False)]
-            if clean_text(table_filter):
-                view = view[view["対象テーブル"].astype(str).str.contains(clean_text(table_filter), case=False, na=False)]
             view = view.sort_values("日時", ascending=False).head(int(limit))
             st.dataframe(view, use_container_width=True, hide_index=True)
             st.download_button(
@@ -1230,59 +1063,24 @@ def show_security_maintenance_menu():
             },
         )
         if st.button("権限設定を保存", type="primary", use_container_width=True):
-            before = perms.to_dict(orient="records")
             save_sqlite_table(edited, SQLITE_TABLE_ROLE_PERMISSIONS, ROLE_PERMISSION_COLUMNS, unique_cols=["権限", "機能"])
-            add_audit_log("権限設定更新", "role_permissions", "", "権限設定を更新", before=before, after=edited.to_dict(orient="records"))
+            add_audit_log("権限設定更新", "role_permissions", "", "権限設定を更新")
             st.success("権限設定を保存しました。")
             st.rerun()
 
     with tab4:
         st.subheader("データ復元")
         st.warning("復元すると現在のDBがバックアップ時点に戻ります。実行前に自動で『復元前バックアップ』を作成します。")
-
-        backups = list_backup_files()
-        if backups:
-            latest = backups[0]
-            st.markdown("#### 最新バックアップから1クリック復元")
-            st.info(f"最新バックアップ：{latest.name}")
-            ok, verify_msg = verify_backup_zip(latest)
-            st.success(verify_msg) if ok else st.error(verify_msg)
-            confirm_latest = st.checkbox("最新バックアップから復元することを理解しました", key="restore_latest_confirm")
-            if st.button("最新バックアップから復元", type="primary", disabled=not confirm_latest or not ok, use_container_width=True):
-                ok_restore, msg = restore_from_backup_zip(latest)
-                if ok_restore:
-                    st.success(msg)
-                    st.info("復元後はアプリを再読み込みしてください。")
-                else:
-                    st.error(msg)
-            st.divider()
-
-        st.markdown("#### アップロードしたバックアップから復元")
         uploaded = st.file_uploader("復元するバックアップZIPを選択", type=["zip"])
         confirm = st.checkbox("現在のデータが上書きされることを理解しました")
-        if uploaded:
-            # 一時保存して検証結果だけ表示
-            try:
-                tmp_path = RESTORE_DIR / f"verify_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{clean_text(uploaded.name, 'restore.zip')}"
-                uploaded.seek(0)
-                tmp_path.write_bytes(uploaded.read())
-                uploaded.seek(0)
-                ok, verify_msg = verify_backup_zip(tmp_path)
-                st.success(verify_msg) if ok else st.error(verify_msg)
-                try:
-                    tmp_path.unlink()
-                except Exception:
-                    pass
-            except Exception as e:
-                st.error(f"検証できませんでした：{e}")
         if st.button("選択したバックアップから復元", type="primary", use_container_width=True):
             if not uploaded:
                 st.error("復元するZIPを選択してください。")
             elif not confirm:
                 st.error("確認チェックを入れてください。")
             else:
-                ok_restore, msg = restore_from_backup_zip(uploaded)
-                if ok_restore:
+                ok, msg = restore_from_backup_zip(uploaded)
+                if ok:
                     st.success(msg)
                     st.info("復元後はアプリを再読み込みしてください。")
                 else:
@@ -1296,41 +1094,15 @@ def show_security_maintenance_menu():
             st.success(status_text)
         else:
             st.error(status_text)
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("DB整合性を今すぐ再チェック", type="primary", use_container_width=True):
-                result = run_db_integrity_check(auto_repair=True)
-                if result.get("ok"):
-                    st.success(get_db_integrity_status_text())
-                    add_audit_log("DB整合性チェック", "sqlite", "", "quick_check ok")
-                else:
-                    st.error(get_db_integrity_status_text())
-                    add_audit_log("DB整合性チェックエラー", "sqlite", "", " / ".join(result.get("messages", [])))
-                st.rerun()
-        with c2:
-            if st.button("整合性チェック後にバックアップ作成", use_container_width=True):
-                result = run_db_integrity_check(auto_repair=True)
-                if result.get("ok"):
-                    zip_path, err = create_backup_zip(kind="手動")
-                    if zip_path and not err:
-                        st.success(f"チェックOK。バックアップ作成：{zip_path.name}")
-                    else:
-                        st.warning(err)
-                else:
-                    st.error("DB整合性が要確認のため、バックアップ作成前に確認してください。")
-
-    with tab6:
-        st.subheader("事故耐性サマリー")
-        backups = list_backup_files()
-        logs = load_sqlite_table(SQLITE_TABLE_AUDIT_LOGS, AUDIT_LOG_COLUMNS)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("バックアップ数", len(backups))
-        c2.metric("監査ログ件数", len(logs))
-        c3.metric("DB状態", "OK" if DB_LAST_INTEGRITY_RESULT.get("ok", True) else "要確認")
-        latest_name = backups[0].name if backups else "なし"
-        c4.metric("最新バックアップ", latest_name[:18] + "..." if len(latest_name) > 18 else latest_name)
-        st.write("保存方針")
-        st.json(get_storage_unification_status() if "get_storage_unification_status" in globals() else {"正データ": "SQLite"})
+        if st.button("DB整合性を今すぐ再チェック", type="primary", use_container_width=True):
+            result = run_db_integrity_check(auto_repair=True)
+            if result.get("ok"):
+                st.success(get_db_integrity_status_text())
+                add_audit_log("DB整合性チェック", "sqlite", "", "quick_check ok")
+            else:
+                st.error(get_db_integrity_status_text())
+                add_audit_log("DB整合性チェックエラー", "sqlite", "", " / ".join(result.get("messages", [])))
+            st.rerun()
 
 
 
@@ -10251,4 +10023,6 @@ elif menu == "利用者マスタ管理":
 elif menu == "ログイン・職員ID管理" and is_admin_user():
     show_login_user_management_menu()
 elif menu == "セキュリティ・保守管理" and is_admin_user():
-    show_security_maintenance_menu()
+    # Streamlit magic が戻り値（DeltaGenerator）を画面表示しないよう、明示的に代入して呼び出す
+    _security_menu_result = show_security_maintenance_menu()
+    _security_menu_result = None
