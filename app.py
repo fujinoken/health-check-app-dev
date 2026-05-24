@@ -149,6 +149,16 @@ SQLITE_TABLE_ALERTS = "alerts"
 SQLITE_TABLE_ACCOUNTS = "login_accounts"
 SQLITE_TABLE_LOGIN_HISTORY = "login_history"
 SQLITE_TABLE_USERS = "users"
+SQLITE_TABLE_APP_SETTINGS = "app_settings"
+
+APP_SETTING_COLUMNS = [
+    "設定キー",
+    "設定値",
+    "分類",
+    "説明",
+    "更新日時",
+    "更新者",
+]
 
 # Streamlitは複数セッションが同じプロセスで同時に保存する可能性があるため、
 # SQLite書き込みはこのロックを必ず通す。
@@ -365,6 +375,198 @@ def load_sqlite_table(table_name: str, columns: list, date_cols=None) -> pd.Data
     return db_read_dataframe(table_name, columns, date_cols=date_cols)
 
 
+
+# =========================
+# 商品化向け：設定系SQLite一元管理
+# =========================
+def ensure_app_settings_table():
+    """JSON/Excelへ散らばりやすい設定をSQLiteへ集約するための共通テーブルを用意する。"""
+    try:
+        if not sqlite_table_exists(SQLITE_TABLE_APP_SETTINGS):
+            db_write_dataframe(pd.DataFrame(columns=APP_SETTING_COLUMNS), SQLITE_TABLE_APP_SETTINGS, APP_SETTING_COLUMNS, unique_cols=["設定キー"])
+    except Exception:
+        # 初期化途中でもアプリ全体を止めない
+        pass
+
+
+def _json_dumps_safe(value) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return json.dumps(str(value), ensure_ascii=False)
+
+
+def _json_loads_safe(value, default=None):
+    if value is None or value == "":
+        return default
+    try:
+        return json.loads(value)
+    except Exception:
+        return default
+
+
+def get_app_setting(setting_key, default=None):
+    """SQLite app_settings から設定値を取得する。値はJSONとして保存・復元する。"""
+    setting_key = clean_text(setting_key)
+    if not setting_key:
+        return default
+    try:
+        ensure_app_settings_table()
+        df = load_sqlite_table(SQLITE_TABLE_APP_SETTINGS, APP_SETTING_COLUMNS)
+        hit = df[df["設定キー"].astype(str) == setting_key]
+        if hit.empty:
+            return default
+        raw = hit.iloc[-1].get("設定値", "")
+        return _json_loads_safe(raw, default)
+    except Exception:
+        return default
+
+
+def set_app_setting(setting_key, value, category="一般設定", description=""):
+    """SQLite app_settings へ設定値を保存する。"""
+    setting_key = clean_text(setting_key)
+    if not setting_key:
+        return
+    try:
+        ensure_app_settings_table()
+        df = load_sqlite_table(SQLITE_TABLE_APP_SETTINGS, APP_SETTING_COLUMNS)
+        df = df[df["設定キー"].astype(str) != setting_key].copy()
+        row = {
+            "設定キー": setting_key,
+            "設定値": _json_dumps_safe(value),
+            "分類": clean_text(category, "一般設定"),
+            "説明": clean_text(description),
+            "更新日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "更新者": current_login_user() if "current_login_user" in globals() else "",
+        }
+        df = pd.concat([df, pd.DataFrame([row], columns=APP_SETTING_COLUMNS)], ignore_index=True)
+        save_sqlite_table(df, SQLITE_TABLE_APP_SETTINGS, APP_SETTING_COLUMNS, unique_cols=["設定キー"])
+    except Exception:
+        pass
+
+
+def delete_app_setting(setting_key):
+    setting_key = clean_text(setting_key)
+    try:
+        ensure_app_settings_table()
+        df = load_sqlite_table(SQLITE_TABLE_APP_SETTINGS, APP_SETTING_COLUMNS)
+        df = df[df["設定キー"].astype(str) != setting_key].copy()
+        save_sqlite_table(df, SQLITE_TABLE_APP_SETTINGS, APP_SETTING_COLUMNS, unique_cols=["設定キー"])
+    except Exception:
+        pass
+
+
+def migrate_json_file_setting_to_db(setting_key, json_path, category="移行設定", default=None):
+    """
+    旧JSONファイルからSQLiteへ初回移行する。
+    DB側に既に値があれば上書きしない。
+    """
+    existing = get_app_setting(setting_key, None)
+    if existing is not None:
+        return existing
+    value = default
+    try:
+        path = Path(json_path)
+        if path.exists():
+            value = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        value = default
+    set_app_setting(setting_key, value, category=category, description=f"{Path(json_path).name} から移行")
+    return value
+
+
+def get_all_app_settings_df():
+    ensure_app_settings_table()
+    return load_sqlite_table(SQLITE_TABLE_APP_SETTINGS, APP_SETTING_COLUMNS)
+
+
+def initialize_default_app_settings():
+    """商品化前提の標準設定をSQLiteへ初期投入する。既存設定は維持する。"""
+    ensure_app_settings_table()
+
+    # メニューカテゴリ設定：旧JSONがあれば初回移行
+    try:
+        if "MENU_CATEGORY_SETTINGS_FILE" in globals():
+            migrate_json_file_setting_to_db(
+                "menu_category_settings_all",
+                MENU_CATEGORY_SETTINGS_FILE,
+                category="メニュー設定",
+                default={},
+            )
+    except Exception:
+        pass
+
+    # 自分専用ダッシュボード設定：旧JSONがあれば初回移行
+    try:
+        if "DASHBOARD_SETTINGS_FILE" in globals():
+            migrate_json_file_setting_to_db(
+                "dashboard_settings_all",
+                DASHBOARD_SETTINGS_FILE,
+                category="ダッシュボード設定",
+                default={},
+            )
+    except Exception:
+        pass
+
+    if get_app_setting("ui_settings", None) is None:
+        set_app_setting(
+            "ui_settings",
+            {
+                "テーマ": "ひだまり標準",
+                "iPad最適化": True,
+                "ボタン大型化": True,
+                "カード表示": True,
+                "フォント倍率": 1.0,
+            },
+            category="UI設定",
+            description="画面表示・iPad対応の基本設定",
+        )
+
+    if get_app_setting("color_settings", None) is None:
+        set_app_setting(
+            "color_settings",
+            {
+                "staff_bg": "#FFFDF7",
+                "staff_accent": "#C9705C",
+                "admin_bg": "#F6F8F7",
+                "admin_accent": "#2F6F5E",
+                "alert": "#C9705C",
+                "success": "#2F6F5E",
+            },
+            category="色設定",
+            description="ブランドカラー・注意色・管理者色の設定",
+        )
+
+    if get_app_setting("life_settings", None) is None:
+        set_app_setting(
+            "life_settings",
+            {
+                "対象月初期値": "当月",
+                "LIFE不足表示": True,
+                "CSV出力前確認": True,
+                "診断表現を避ける": True,
+                "AIは整理係": True,
+            },
+            category="LIFE設定",
+            description="LIFE管理・CSV出力・AI整理に関する設定",
+        )
+
+    if get_app_setting("facility_settings", None) is None:
+        set_app_setting(
+            "facility_settings",
+            {
+                "施設名": "ひだまり",
+                "事業種別": "小規模介護施設",
+                "定員": "",
+                "所在地": "",
+                "管理者名": "",
+                "連絡先": "",
+            },
+            category="施設設定",
+            description="施設名・管理者名・帳票表示用の基本設定",
+        )
+
+
 def migrate_excel_to_sqlite_if_needed(table_name: str, excel_path: Path, sheet_name: str, columns: list, date_cols=None, unique_cols=None):
     """初回起動時のみ、既存ExcelデータをSQLiteへ移行する。DBに1件でもあれば上書きしない。"""
     ensure_dirs()
@@ -461,6 +663,7 @@ def ensure_hidamari_db():
     ensure_account_file()
     ensure_login_history_file()
     ensure_user_file()
+    initialize_default_app_settings()
     run_db_integrity_check(auto_repair=True)
 
 # =========================
@@ -681,6 +884,15 @@ def create_backup_zip(kind="手動"):
                 if Path(xlsx).exists():
                     zf.write(xlsx, arcname=f"data/{Path(xlsx).name}")
 
+            # 旧JSON設定が残っている場合も互換バックアップ
+            for json_file in [MENU_CATEGORY_SETTINGS_FILE, globals().get("DASHBOARD_SETTINGS_FILE", DATA_DIR / "dashboard_settings.json")]:
+                try:
+                    if Path(json_file).exists():
+                        zf.write(json_file, arcname=f"data/{Path(json_file).name}")
+                except Exception:
+                    pass
+
+
             # 写真・Excel添付
             for folder in [BUSINESS_HANDOVER_PHOTO_DIR, BUSINESS_HANDOVER_EXCEL_DIR]:
                 if folder.exists():
@@ -759,6 +971,16 @@ def restore_from_backup_zip(uploaded_file):
                 arc = f"data/{Path(xlsx).name}"
                 if arc in names:
                     Path(xlsx).write_bytes(zf.read(arc))
+
+            # あれば旧JSON設定も復元（SQLite設定へは次回起動時に移行可能）
+            for json_file in [MENU_CATEGORY_SETTINGS_FILE, globals().get("DASHBOARD_SETTINGS_FILE", DATA_DIR / "dashboard_settings.json")]:
+                try:
+                    arc = f"data/{Path(json_file).name}"
+                    if arc in names:
+                        Path(json_file).write_bytes(zf.read(arc))
+                except Exception:
+                    pass
+
 
         add_audit_log("データ復元", "restore", restore_zip_path.name, "バックアップZIPから復元")
         record_backup_history("復元", restore_zip_path, "成功", "バックアップZIPから復元")
@@ -6926,7 +7148,7 @@ MENU_GROUPS_ADMIN = {
     "記録確認": ["過去データ管理", "排泄詳細管理", "実施履歴一覧", "短期目標データ管理"],
     "短期目標・LIFE": ["短期目標・モニタリング", "短期目標マスタ", "モニタリング下書き作成", "LIFE入力標準化", "管理者LIFE入力", "LIFE不足チェック", "LIFE CSV出力", "LIFE登録一覧", "加算シミュレーション"],
     "帳票・共有": ["家族向けレポート作成", "ひだまりレポートPDF", "データダウンロード"],
-    "設定・保守": ["利用者マスタ管理", "ログイン・職員ID管理", "セキュリティ・保守管理", "自分専用ダッシュボード設定", "メニューカテゴリ設定", "現場の気づき構造化・AI管理者支援"],
+    "設定・保守": ["利用者マスタ管理", "ログイン・職員ID管理", "セキュリティ・保守管理", "自分専用ダッシュボード設定", "メニューカテゴリ設定", "システム設定", "現場の気づき構造化・AI管理者支援"],
 }
 
 MENU_GROUPS_STAFF = {"今日の入力": ["業務全体申し送り", "健康チェック入力", "排泄チェック入力", "日々の実施チェック"]}
@@ -6981,17 +7203,23 @@ def normalize_menu_category_df(df):
 
 
 def load_menu_category_settings(role="admin"):
-    """管理者が編集したメニューカテゴリ設定を読み込む。なければ標準設定を使う。"""
+    """管理者が編集したメニューカテゴリ設定をSQLiteから読み込む。なければ標準設定を使う。"""
     ensure_dirs()
     role = "admin" if role == "admin" else "staff"
     standard_df = get_standard_menu_category_df(role)
-    settings = {}
-    if MENU_CATEGORY_SETTINGS_FILE.exists():
-        try:
-            settings = json.loads(MENU_CATEGORY_SETTINGS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            settings = {}
-    rows = settings.get(role, [])
+
+    settings_all = get_app_setting("menu_category_settings_all", None)
+    if settings_all is None:
+        settings_all = migrate_json_file_setting_to_db(
+            "menu_category_settings_all",
+            MENU_CATEGORY_SETTINGS_FILE,
+            category="メニュー設定",
+            default={},
+        )
+    if not isinstance(settings_all, dict):
+        settings_all = {}
+
+    rows = settings_all.get(role, [])
     if rows:
         df = normalize_menu_category_df(pd.DataFrame(rows))
     else:
@@ -7004,32 +7232,40 @@ def load_menu_category_settings(role="admin"):
         df = pd.concat([df, missing], ignore_index=True)
 
     # 管理者が設定画面を非表示にしても復帰できるよう、必ず表示する。
-    if role == "admin" and "メニューカテゴリ設定" in standard_df["メニュー"].tolist():
-        if "メニューカテゴリ設定" not in df["メニュー"].tolist():
-            add = standard_df[standard_df["メニュー"] == "メニューカテゴリ設定"]
-            df = pd.concat([df, add], ignore_index=True)
-        df.loc[df["メニュー"] == "メニューカテゴリ設定", "表示"] = True
+    required_admin_menus = ["メニューカテゴリ設定", "システム設定"]
+    if role == "admin":
+        for required_menu in required_admin_menus:
+            if required_menu in standard_df["メニュー"].tolist():
+                if required_menu not in df["メニュー"].tolist():
+                    add = standard_df[standard_df["メニュー"] == required_menu]
+                    df = pd.concat([df, add], ignore_index=True)
+                df.loc[df["メニュー"] == required_menu, "表示"] = True
 
     return normalize_menu_category_df(df)
 
 
 def save_menu_category_settings(df, role="admin"):
-    """メニューカテゴリ自己設定をJSONへ保存する。"""
+    """メニューカテゴリ自己設定をSQLiteへ保存する。"""
     ensure_dirs()
     role = "admin" if role == "admin" else "staff"
     clean_df = normalize_menu_category_df(df)
-    if role == "admin" and "メニューカテゴリ設定" in clean_df["メニュー"].tolist():
-        clean_df.loc[clean_df["メニュー"] == "メニューカテゴリ設定", "表示"] = True
-    settings = {}
-    if MENU_CATEGORY_SETTINGS_FILE.exists():
-        try:
-            settings = json.loads(MENU_CATEGORY_SETTINGS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            settings = {}
-    settings[role] = clean_df.to_dict(orient="records")
-    MENU_CATEGORY_SETTINGS_FILE.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    if role == "admin":
+        for required_menu in ["メニューカテゴリ設定", "システム設定"]:
+            if required_menu in clean_df["メニュー"].tolist():
+                clean_df.loc[clean_df["メニュー"] == required_menu, "表示"] = True
+
+    settings_all = get_app_setting("menu_category_settings_all", {})
+    if not isinstance(settings_all, dict):
+        settings_all = {}
+    settings_all[role] = clean_df.to_dict(orient="records")
+    set_app_setting(
+        "menu_category_settings_all",
+        settings_all,
+        category="メニュー設定",
+        description="管理者・職員のメニューカテゴリ自己設定",
+    )
     try:
-        add_audit_log("メニューカテゴリ設定更新", "menu_category_settings", role, "メニューカテゴリ自己設定を保存")
+        add_audit_log("メニューカテゴリ設定更新", "app_settings", role, "メニューカテゴリ自己設定をSQLiteへ保存")
     except Exception:
         pass
 
@@ -7108,9 +7344,37 @@ def show_menu_category_settings_menu():
 
 
 
+
+def get_color_settings():
+    """色設定をSQLiteから取得し、UI_COLORSへ反映するための値を返す。"""
+    default = {
+        "staff_bg": UI_COLORS["staff"]["bg"],
+        "staff_accent": UI_COLORS["staff"]["accent"],
+        "admin_bg": UI_COLORS["admin"]["bg"],
+        "admin_accent": UI_COLORS["admin"]["accent"],
+        "alert": "#C9705C",
+        "success": "#2F6F5E",
+    }
+    saved = get_app_setting("color_settings", default)
+    if not isinstance(saved, dict):
+        saved = default
+    merged = {**default, **saved}
+    return merged
+
+
 def get_ui_theme():
     role_now = st.session_state.get("role", "staff")
-    return UI_COLORS["admin"] if role_now == "admin" else UI_COLORS["staff"]
+    base = dict(UI_COLORS["admin"] if role_now == "admin" else UI_COLORS["staff"])
+    colors = get_color_settings()
+    if role_now == "admin":
+        base["bg"] = clean_text(colors.get("admin_bg"), base["bg"])
+        base["accent"] = clean_text(colors.get("admin_accent"), base["accent"])
+        base["accent_dark"] = clean_text(colors.get("admin_accent"), base["accent_dark"])
+    else:
+        base["bg"] = clean_text(colors.get("staff_bg"), base["bg"])
+        base["accent"] = clean_text(colors.get("staff_accent"), base["accent"])
+        base["accent_dark"] = clean_text(colors.get("staff_accent"), base["accent_dark"])
+    return base
 
 
 def apply_design():
@@ -7557,6 +7821,167 @@ def show_life_record_list():
 
 
 
+
+# =========================
+# システム設定（商品化向け：設定系SQLite一元管理）
+# =========================
+def show_system_settings_menu():
+    """JSON/Excel/コードに散らばる設定を、商品化に向けてSQLite側で管理する画面。"""
+    if not is_admin_user():
+        st.warning("このメニューは管理者専用です。")
+        return
+
+    ui_section("システム設定", "商品化に向けて、UI・色・LIFE・施設情報などの設定をSQLiteに集約して管理します。", "⚙️")
+    ui_card(
+        "設定DB化の状態",
+        "この画面で保存した内容は app_settings テーブルに保存されます。バックアップZIPにはSQLite DBが含まれるため、復元・移行がしやすくなります。",
+        "JSON／Excelへ分散しないための土台です。",
+        soft=True,
+    )
+
+    initialize_default_app_settings()
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["施設設定", "UI設定", "色設定", "LIFE設定", "設定一覧"])
+
+    with tab1:
+        st.subheader("施設設定")
+        facility = get_app_setting("facility_settings", {})
+        if not isinstance(facility, dict):
+            facility = {}
+        with st.form("facility_settings_form"):
+            c1, c2 = st.columns(2)
+            with c1:
+                facility_name = st.text_input("施設名", value=clean_text(facility.get("施設名"), "ひだまり"))
+                service_type = st.text_input("事業種別", value=clean_text(facility.get("事業種別"), "小規模介護施設"))
+                capacity = st.text_input("定員", value=clean_text(facility.get("定員")))
+            with c2:
+                manager = st.text_input("管理者名", value=clean_text(facility.get("管理者名")))
+                tel = st.text_input("連絡先", value=clean_text(facility.get("連絡先")))
+                address = st.text_input("所在地", value=clean_text(facility.get("所在地")))
+            if st.form_submit_button("施設設定を保存", type="primary", use_container_width=True):
+                set_app_setting(
+                    "facility_settings",
+                    {
+                        "施設名": facility_name,
+                        "事業種別": service_type,
+                        "定員": capacity,
+                        "所在地": address,
+                        "管理者名": manager,
+                        "連絡先": tel,
+                    },
+                    category="施設設定",
+                    description="施設名・管理者・帳票表示用の基本情報",
+                )
+                add_audit_log("施設設定更新", "app_settings", "facility_settings", "施設設定をSQLiteへ保存")
+                st.success("施設設定を保存しました。")
+                st.rerun()
+
+    with tab2:
+        st.subheader("UI設定")
+        ui = get_app_setting("ui_settings", {})
+        if not isinstance(ui, dict):
+            ui = {}
+        with st.form("ui_settings_form"):
+            theme_name = st.text_input("テーマ名", value=clean_text(ui.get("テーマ"), "ひだまり標準"))
+            ipad_opt = st.checkbox("iPad最適化", value=bool(ui.get("iPad最適化", True)))
+            large_button = st.checkbox("ボタン大型化", value=bool(ui.get("ボタン大型化", True)))
+            card_view = st.checkbox("カード表示", value=bool(ui.get("カード表示", True)))
+            font_scale = st.number_input("フォント倍率", min_value=0.8, max_value=1.4, value=float(ui.get("フォント倍率", 1.0)), step=0.05)
+            if st.form_submit_button("UI設定を保存", type="primary", use_container_width=True):
+                set_app_setting(
+                    "ui_settings",
+                    {
+                        "テーマ": theme_name,
+                        "iPad最適化": ipad_opt,
+                        "ボタン大型化": large_button,
+                        "カード表示": card_view,
+                        "フォント倍率": font_scale,
+                    },
+                    category="UI設定",
+                    description="画面表示・タブレット対応設定",
+                )
+                add_audit_log("UI設定更新", "app_settings", "ui_settings", "UI設定をSQLiteへ保存")
+                st.success("UI設定を保存しました。")
+                st.rerun()
+
+    with tab3:
+        st.subheader("色設定")
+        colors_setting = get_color_settings()
+        with st.form("color_settings_form"):
+            c1, c2 = st.columns(2)
+            with c1:
+                staff_bg = st.text_input("職員画面 背景色", value=clean_text(colors_setting.get("staff_bg"), "#FFFDF7"))
+                staff_accent = st.text_input("職員画面 アクセント色", value=clean_text(colors_setting.get("staff_accent"), "#C9705C"))
+                alert_color = st.text_input("注意色", value=clean_text(colors_setting.get("alert"), "#C9705C"))
+            with c2:
+                admin_bg = st.text_input("管理者画面 背景色", value=clean_text(colors_setting.get("admin_bg"), "#F6F8F7"))
+                admin_accent = st.text_input("管理者画面 アクセント色", value=clean_text(colors_setting.get("admin_accent"), "#2F6F5E"))
+                success_color = st.text_input("確認済み色", value=clean_text(colors_setting.get("success"), "#2F6F5E"))
+            if st.form_submit_button("色設定を保存", type="primary", use_container_width=True):
+                set_app_setting(
+                    "color_settings",
+                    {
+                        "staff_bg": staff_bg,
+                        "staff_accent": staff_accent,
+                        "admin_bg": admin_bg,
+                        "admin_accent": admin_accent,
+                        "alert": alert_color,
+                        "success": success_color,
+                    },
+                    category="色設定",
+                    description="UIカラー設定",
+                )
+                add_audit_log("色設定更新", "app_settings", "color_settings", "色設定をSQLiteへ保存")
+                st.success("色設定を保存しました。再読み込み後に反映されます。")
+                st.rerun()
+
+    with tab4:
+        st.subheader("LIFE設定")
+        life = get_app_setting("life_settings", {})
+        if not isinstance(life, dict):
+            life = {}
+        with st.form("life_settings_form"):
+            c1, c2 = st.columns(2)
+            with c1:
+                month_default = st.selectbox("対象月初期値", ["当月", "前月"], index=0 if clean_text(life.get("対象月初期値"), "当月") == "当月" else 1)
+                missing_view = st.checkbox("LIFE不足表示", value=bool(life.get("LIFE不足表示", True)))
+                csv_confirm = st.checkbox("CSV出力前確認", value=bool(life.get("CSV出力前確認", True)))
+            with c2:
+                avoid_diag = st.checkbox("診断表現を避ける", value=bool(life.get("診断表現を避ける", True)))
+                ai整理 = st.checkbox("AIは整理係", value=bool(life.get("AIは整理係", True)))
+            if st.form_submit_button("LIFE設定を保存", type="primary", use_container_width=True):
+                set_app_setting(
+                    "life_settings",
+                    {
+                        "対象月初期値": month_default,
+                        "LIFE不足表示": missing_view,
+                        "CSV出力前確認": csv_confirm,
+                        "診断表現を避ける": avoid_diag,
+                        "AIは整理係": ai整理,
+                    },
+                    category="LIFE設定",
+                    description="LIFE管理・AI整理・CSV出力設定",
+                )
+                add_audit_log("LIFE設定更新", "app_settings", "life_settings", "LIFE設定をSQLiteへ保存")
+                st.success("LIFE設定を保存しました。")
+                st.rerun()
+
+    with tab5:
+        st.subheader("app_settings 一覧")
+        settings_df = get_all_app_settings_df()
+        if settings_df.empty:
+            st.info("設定はまだ登録されていません。")
+        else:
+            st.dataframe(settings_df.sort_values(["分類", "設定キー"]), use_container_width=True, hide_index=True)
+            st.download_button(
+                "設定一覧をExcelでダウンロード",
+                data=to_excel_download(settings_df),
+                file_name=f"app_settings_{date.today().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+
 # =========================
 # 自分専用ダッシュボード設定
 # =========================
@@ -7585,13 +8010,16 @@ def load_dashboard_settings(username=None):
     if "dashboard_enabled_items" in st.session_state:
         return set([x for x in st.session_state["dashboard_enabled_items"] if x in DASHBOARD_ITEMS])
 
-    if not DASHBOARD_SETTINGS_FILE.exists():
-        return set(DEFAULT_DASHBOARD_ITEMS)
-
-    try:
-        data = json.loads(DASHBOARD_SETTINGS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return set(DEFAULT_DASHBOARD_ITEMS)
+    data = get_app_setting("dashboard_settings_all", None)
+    if data is None:
+        data = migrate_json_file_setting_to_db(
+            "dashboard_settings_all",
+            DASHBOARD_SETTINGS_FILE,
+            category="ダッシュボード設定",
+            default={},
+        )
+    if not isinstance(data, dict):
+        data = {}
 
     items = data.get(username)
     if items is None:
@@ -7602,12 +8030,8 @@ def load_dashboard_settings(username=None):
 
 def save_dashboard_settings(username, enabled_items):
     ensure_dirs()
-    if DASHBOARD_SETTINGS_FILE.exists():
-        try:
-            data = json.loads(DASHBOARD_SETTINGS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
-    else:
+    data = get_app_setting("dashboard_settings_all", {})
+    if not isinstance(data, dict):
         data = {}
 
     # ログインキーの揺れで反映されないのを防ぐため、管理者はkanriにも保存
@@ -7616,9 +8040,11 @@ def save_dashboard_settings(username, enabled_items):
     if username == "kanri" or is_admin_user():
         data["kanri"] = clean_items
 
-    DASHBOARD_SETTINGS_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8"
+    set_app_setting(
+        "dashboard_settings_all",
+        data,
+        category="ダッシュボード設定",
+        description="自分専用ダッシュボードの表示項目設定",
     )
 
 
@@ -9267,6 +9693,9 @@ elif menu == "管理者支援":
 # =========================
 elif menu == "メニューカテゴリ設定":
     show_menu_category_settings_menu()
+
+elif menu == "システム設定":
+    show_system_settings_menu()
 
 elif menu == "データダウンロード":
     show_admin_data_download_menu()
