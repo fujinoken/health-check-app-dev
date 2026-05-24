@@ -7180,10 +7180,10 @@ def apply_design():
         .admin-welcome {{ background:linear-gradient(135deg, #EAF1F5 0%, #F7FAFA 100%); border:1px solid #BFD0D8; border-radius:18px; padding:14px 16px; margin:10px 0 16px 0; color:#405766; }}
         .mini-badge {{ display:inline-block; background:#ffffffcc; border:1px solid rgba(0,0,0,.08); border-radius:999px; padding:5px 10px; margin:3px 4px 3px 0; font-size:.86rem; }}
 
-        .mindset-box { background:#FFFDF7; border:1px solid var(--hidamari-border); border-left:6px solid var(--hidamari-accent); border-radius:16px; padding:13px 15px; margin:10px 0 14px 0; color:var(--hidamari-sub); line-height:1.65; }
-        .mindset-title { color:var(--hidamari-accent-dark); font-weight:850; margin-bottom:4px; }
-        .check-card { background:#FFFFFF; border:1px solid var(--hidamari-border); border-radius:14px; padding:12px 14px; margin:7px 0; }
-        .stop-card { background:#FFF7EC; border:1px solid #E6C9B7; border-radius:14px; padding:12px 14px; margin:7px 0; }
+        .mindset-box {{ background:#FFFDF7; border:1px solid var(--hidamari-border); border-left:6px solid var(--hidamari-accent); border-radius:16px; padding:13px 15px; margin:10px 0 14px 0; color:var(--hidamari-sub); line-height:1.65; }}
+        .mindset-title {{ color:var(--hidamari-accent-dark); font-weight:850; margin-bottom:4px; }}
+        .check-card {{ background:#FFFFFF; border:1px solid var(--hidamari-border); border-radius:14px; padding:12px 14px; margin:7px 0; }}
+        .stop-card {{ background:#FFF7EC; border:1px solid #E6C9B7; border-radius:14px; padding:12px 14px; margin:7px 0; }}
         @media (max-width: 900px) {{
             .block-container {{ padding-left:.8rem; padding-right:.8rem; }}
             h1 {{ font-size:1.55rem; }} h2 {{ font-size:1.35rem; }} h3 {{ font-size:1.12rem; }}
