@@ -1,17 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-ひだまり 健康チェック管理システム Ver3.3
-画面分離・安全移行版
+ひだまり 健康チェック管理システム Ver3.3.1
+画面分離・安全移行版（起動修正版）
 
-本番安定性を守るため、既存の単一app.py本体は services/legacy_app.py に退避し、
-入口ファイル app.py から読み込みます。
-
-次段階では pages/dashboard.py 等へ画面処理を少しずつ移します。
+Streamlit Cloudでは __name__ 判定で起動が止まる場合があるため、
+app.py読み込み時に必ず services/legacy_app.py を実行します。
 """
-import importlib
+from services.runtime import run_legacy_app
 
-def main():
-    importlib.import_module("services.legacy_app")
-
-if __name__ == "__main__":
-    main()
+# Streamlit Cloudの起動時に必ず本体を表示する
+run_legacy_app()
